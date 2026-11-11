@@ -771,10 +771,12 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
                              workdays=None, skip_task_ids=None, child_stats=None):
     """工单 → 周报条目。纳入条件：处理人是我 / 本周期内我有工时 / 关联任务我负责。
 
-    完成判断（状态 + 工时记录）：
-    - 本周期记了工时、且周期之后没有再记 → 本周完成（工单状态没推进会也按完成算）；
-    - 周期之后又记了工时 → 说明本周期还没做完，记未完成（进度按状态/工时估算）；
-    - 没有本周期工时（本周期新建）→ 状态已完成/已评分/待评分、或最后一条工时备注写了「完成」才算完成；
+    完成判断（2026-11-11 起：平台状态 + 工时备注，不再猜「下周还会不会记工时」）：
+    - 平台已收口（已完成/已关闭/已评分/待评分/有评分）且完成日落在本周期 → 完成；
+    - 本周期有我的工时，且**该工时备注写了完成**（已完成/完成/已关闭/已处理/搞定/结束/交付完成/
+      上线完成，且不含未完成/待完成/继续…）→ 完成；工时里 progress 填了 100 → 也算完成；
+    - 两者都不满足 → 本周期记未完成（进度按工时进度 / 工单状态估算，封顶 95%）；
+    - 没有本周期工时（本周期新建或跨周收尾）→ 只看完成日是否落在本周期；
     - 补充工单（我的工时都早于建单日，事后补录）不生成：那种已记在之前周期的周报里。
 
     child_stats：{task_id: (子任务总数, 已完成数)}。工单本身没有子任务，但它关联的任务有；
@@ -814,9 +816,20 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
         settled = status in ("completed", "closed", "rated", "pending_review") or (
             score not in (None, "", 0))
         completion = completion_date(settled, all_wls, updated, created)
+        # 本周的工时记录（用来判断「自报完成」：备注写了完成，或工时进度填了 100）
+        p_wls = [w for w in all_wls
+                 if ws <= (to_date(w.get("work_date")) or date.min) <= we]
+        last_p_wl = max(p_wls, key=lambda w: to_date(w.get("work_date")) or date.min) \
+            if p_wls else None
+        p_prog = max([w.get("progress") for w in p_wls
+                      if isinstance(w.get("progress"), (int, float)) and w.get("progress")],
+                     default=None)
+        self_done = bool((last_p_wl and remark_done(last_p_wl.get("remark"))) or p_prog == 100)
         if p_dates:
-            # 本周期记了工时、周期后没有新工时 → 本周完成；周期后还有工时 → 未完成
-            completed_in_period = bool(last_wl and last_wl <= we)
+            # 本周有我的工时：只有「平台收口且完成日落在本周」或「本周工时自报完成」才算 100%。
+            # 不再用「之后没再记工时」倒推——那是在猜未来：下周还会不会接着写工时，本周无从得知。
+            completed_in_period = bool(
+                (settled and completion and ws <= completion <= we) or self_done)
         else:
             completed_in_period = bool(completion and ws <= completion <= we)
 
@@ -1261,7 +1274,8 @@ def build_items_from_tasks(tasks, worklogs, handler, ws, we,
     """任务中心 → 周报条目：本周期内我有工时的任务，或本周期新建且我负责的任务；已取消跳过。
 
     - 不按「日期跨度有交集」兜底：上周期就已完成、本周只是到期日变动的旧任务不会进来；
-    - 完成判断同工单：任务状态 / 最后一条工时备注，完成日不在本周期 → 本周期记未完成；
+    - 完成判断与工单一致：任务状态 / 完成时间，或本周工时备注写了完成 / 工时进度 100；
+      完成日不在本周期 → 本周期记未完成；
     - covered_task_ids：已由工单生成条目的任务，避免重复；
     - details / ticket_links：同前。
     """
@@ -1341,7 +1355,20 @@ def build_items_from_tasks(tasks, worklogs, handler, ws, we,
         complete = to_date(str(t.get("actual_complete_time") or t.get("actualCompleteTime") or "")[:10])
         done = status in TASK_DONE_STATUSES or bool(complete)
         completion = completion_date(done, all_wls, updated, created)
-        completed_in_period = bool(completion and ws <= completion <= we)
+        # 与工单同一口径：本周有工时 → 平台收口（完成日在本周）或本周工时自报完成才算 100%
+        p_wls = [w for w in all_wls
+                 if ws <= (to_date(w.get("work_date")) or date.min) <= we]
+        last_p_wl = max(p_wls, key=lambda w: to_date(w.get("work_date")) or date.min) \
+            if p_wls else None
+        p_prog = max([w.get("progress") for w in p_wls
+                      if isinstance(w.get("progress"), (int, float)) and w.get("progress")],
+                     default=None)
+        self_done = bool((last_p_wl and remark_done(last_p_wl.get("remark"))) or p_prog == 100)
+        if p_dates:
+            completed_in_period = bool(
+                (done and completion and ws <= completion <= we) or self_done)
+        else:
+            completed_in_period = bool(completion and ws <= completion <= we)
 
         if p_dates:
             lo, hi = p_dates[0], p_dates[-1]
