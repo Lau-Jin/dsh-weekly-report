@@ -195,27 +195,26 @@ def main():
         )
         check("服务在时 watchdog 空跑", r2.returncode == 0 and os.path.getsize(log_file) == size1)
     finally:
-        # 收拾：杀掉测试实例（包括 watchdog 拉起的）
+        # 收拾：先按 ping 报的 pid 精确杀掉（watchdog 拉起的那个进程是 detached 的）
         try:
-            out = subprocess.run(
+            pid = json.loads(get("/api/ping", timeout=2)[1]).get("pid")
+            if pid:
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=20)
+        except Exception:
+            pass
+        for p in procs:
+            kill(p)
+        # 兜底：清掉测试数据目录起的实例（env 里的 WEEKLY_PANEL_DATA 会出现在命令行？没有，按 tmp 名兜一次）
+        try:
+            subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                  "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
-                 f"Where-Object {{ $_.CommandLine -match 'server\\.cjs' -and $_.CommandLine -match '{PORT}' }} | "
+                 f"Where-Object {{ $_.CommandLine -match 'wr_keepalive_' -or $_.CommandLine -match '{PORT}' }} | "
                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
                 capture_output=True, text=True, timeout=30,
             )
         except Exception:
             pass
-        for p in procs:
-            kill(p)
-        # 服务是用默认端口起的（env 里带了端口但命令行没有），再按父目录兜底清一遍
-        subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
-             "Where-Object { $_.CommandLine -match 'wr_keepalive_' } | "
-             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
-            capture_output=True, text=True, timeout=30,
-        )
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("")
