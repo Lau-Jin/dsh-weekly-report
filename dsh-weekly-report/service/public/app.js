@@ -57,6 +57,27 @@ const fmtTime = (iso) => {
 
 const fmtSize = (n) => (n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B');
 
+/* ---------------------------------------------------------------- 路径显示开关 */
+// 路径里带用户名、目录结构，默认藏起来；需要时点「显示路径」再看（记得住选择）。
+let showPaths = false;
+try { showPaths = window.localStorage.getItem('wr-show-paths') === '1'; } catch (e) { /* 无 localStorage */ }
+
+const PATH_HIDDEN = '<span class="wr-muted">•••• 已隐藏</span>';
+
+function pathText(value) {
+  if (!value) return '—';
+  return showPaths ? esc(value) : PATH_HIDDEN;
+}
+
+function pathBlock(value) {
+  if (!value) return '—';
+  return `<div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${pathText(value)}</div>`;
+}
+
+function syncPathToggles() {
+  $$('[data-path-toggle]').forEach((b) => { b.textContent = showPaths ? '隐藏路径' : '显示路径'; });
+}
+
 /* ---------------------------------------------------------------- 渲染：顶栏 */
 function renderStatus(checks, migratedFrom) {
   const el = $('#status');
@@ -94,6 +115,11 @@ function renderPaths(paths) {
     ['API Key', paths.key],
     ['输出目录', paths.outDir],
   ].filter(([, v]) => v);
+  if (!showPaths) {
+    $('#paths').innerHTML = `<dt>路径</dt>
+      <dd><span class="wr-muted">•••• 已隐藏（点右上角「显示路径」查看）</span></dd>`;
+    return;
+  }
   $('#paths').innerHTML = rows.map(([k, v]) => `
     <dt>${esc(k)}</dt>
     <dd><span>${esc(v)}</span>
@@ -110,7 +136,7 @@ function renderSchedule(s) {
     return;
   }
   if (!s.installed) {
-    box.innerHTML = '<span class="wr-muted">未注册（不注册也能在面板里手动生成）</span>';
+    box.innerHTML = '<span class="wr-muted">未登记（不登记也能在面板里手动生成）</span>';
     hint.textContent = '';
     return;
   }
@@ -118,10 +144,9 @@ function renderSchedule(s) {
   if (s.status) chips.push(`<span class="wr-chip">${esc(s.status)}</span>`);
   if (s.nextRun) chips.push(`<span class="wr-chip">下次 ${esc(s.nextRun)}</span>`);
   chips.push(s.pointsToPlugin
-    ? '<span class="wr-chip wr-chip--ok">指向插件引擎</span>'
-    : '<span class="wr-chip wr-chip--warn">仍指向外部脚本</span>');
-  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>
-    <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(s.target || '—')}</div>`;
+    ? '<span class="wr-chip wr-chip--ok">已接管</span>'
+    : '<span class="wr-chip wr-chip--warn">未接管</span>');
+  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(s.target);
   hint.textContent = '';
 }
 
@@ -143,8 +168,7 @@ function renderWatchdog(wd) {
   if (wd.state) chips.push(`<span class="wr-chip">${esc(wd.state)}</span>`);
   if (wd.next) chips.push(`<span class="wr-chip">下次 ${esc(wd.next)}</span>`);
   chips.push('<span class="wr-chip wr-chip--ok">每 2 分钟探活</span>');
-  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>
-    <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(wd.target || '—')}</div>`;
+  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(wd.target);
   if (hint) hint.textContent = '';
 }
 
@@ -166,9 +190,7 @@ function renderLastRun(run) {
     `<span class="wr-chip">${esc(fmtTime(run.finishedAt || run.startedAt))}</span>`,
   ];
   box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` +
-    (run.outPath
-      ? `<div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(run.outPath)}</div>`
-      : '') +
+    (run.outPath ? pathBlock(run.outPath) : '') +
     (run.error
       ? `<div style="color:var(--err);font-size:11.5px;margin-top:5px">${esc(run.error)}</div>`
       : '');
@@ -223,7 +245,7 @@ function renderReports(reports) {
       <div class="wr-rep">
         <div style="min-width:0;flex:1 1 auto">
           <div class="wr-rep__name">${esc(r.name)}</div>
-          <div class="wr-rep__sub">${esc(r.dir)} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
+          <div class="wr-rep__sub">${showPaths ? esc(r.dir) : '路径已隐藏'} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
         </div>
         <button class="wr-btn" data-view="${esc(r.path)}">查看</button>
       </div>
@@ -583,11 +605,37 @@ function bindActions() {
     } catch (e) { toast('失败：' + e.message, 'err'); }
   };
 
+  $('#btn-wd-toggle').onclick = () => {
+    const body = $('#wd-body');
+    const btn = $('#btn-wd-toggle');
+    const open = body.hidden;
+    body.hidden = !open;
+    btn.textContent = open ? '收起' : '展开';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  // 路径显示开关（概览 + 历史两处按钮联动）
+  $$('[data-path-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      showPaths = !showPaths;
+      try { localStorage.setItem('wr-show-paths', showPaths ? '1' : '0'); } catch (e) { /* ignore */ }
+      syncPathToggles();
+      const d = state.data;
+      if (!d) return;
+      renderPaths(d.paths || {});
+      renderSchedule(d.schedule);
+      renderWatchdog(d.watchdog);
+      renderLastRun(d.run);
+      renderReports(d.reports || []);
+    });
+  });
+  syncPathToggles();
+
   $('#btn-sched-install').onclick = async () => {
-    if (!confirm('将创建/覆盖计划任务「周报自动生成」，改为调用插件内置引擎（每周日 22:00）。继续？')) return;
+    if (!confirm('将创建/覆盖 Windows 计划任务「周报自动生成」：每周日 22:00 自动生成周报并发送通知。继续？')) return;
     try {
       const r = await post('/api/schedule', { action: 'install' });
-      toast(r.ok ? '定时任务已指向插件引擎' : '注册失败', r.ok ? 'ok' : 'err');
+      toast(r.ok ? '定时任务已登记' : '登记失败', r.ok ? 'ok' : 'err');
       await refresh(true);
     } catch (e) { toast('失败：' + e.message, 'err'); }
   };
