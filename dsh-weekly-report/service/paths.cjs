@@ -15,7 +15,7 @@
  *
  * 首次启动会按顺序尝试迁移旧位置（只读）：
  *   1. <插件>/service/data（旧版 Junction 安装的数据目录）
- *   2. D:\Reports\weekly_config.json + yanfa_api_key.txt（更早的桌面版）
+ *   2. D:\Reports\weekly_config.json + api_key.txt（更早的桌面版）
  */
 'use strict';
 
@@ -62,9 +62,9 @@ const LOGS = path.join(DATA_DIR, 'logs');
 /** 旧位置 1：插件目录内的 service/data（Junction 版之前的默认） */
 const LEGACY_PLUGIN_DATA = path.join(SERVICE_DIR, 'data');
 /** 旧位置 2：更早的桌面版 */
-const LEGACY_DIR = process.env.WEEKLY_LEGACY_DIR || 'D:\\Reports';
+const LEGACY_DIR = process.env.WEEKLY_LEGACY_DIR || 'D:\\Desktop\\工作记录';
 const LEGACY_CONFIG = path.join(LEGACY_DIR, 'weekly_config.json');
-const LEGACY_KEY = path.join(LEGACY_DIR, 'yanfa_api_key.txt');
+const LEGACY_KEY = path.join(LEGACY_DIR, 'api_key.txt');
 
 function ensureDirs() {
   for (const dir of [DATA_DIR, REPORTS, LOGS]) {
@@ -91,7 +91,7 @@ function defaultConfig() {
   return {
     token_file: KEY,
     out_dir: REPORTS,
-    folder: 'D:\\Perf\\2026',
+    folder: 'D:\\Desktop\\绩效\\绩效表\\2026',
     handler: '张三',
     threshold: 0.85,
     mcp_url: 'https://mcp.example.com/api/mcp',

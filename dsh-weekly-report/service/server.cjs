@@ -225,6 +225,8 @@ const NOTES = [
   { id: 'bulk', level: 'warn', title: '批量补录会被跳过', text: '同一小时内「我负责 + 本周期新建」任务 ≥20 个，判定为历史数据批量导入；这类任务必须本周期有我的工时才算。' },
   { id: 'supp', level: 'warn', title: '补充工单不重复生成', text: '本周期新建但工时全在本周期之前的工单（先干活后补单），不在本周期生成；对应任务也跳过。' },
   { id: 'crossweek', level: 'info', title: '跨周收尾', text: '本周期内被点完成、处理人是我、且整张工单零工时记录 → 也算本周完成（100%，时间取完成日）。有过工时但都在周期外的，不重复计入。' },
+  { id: 'perf', level: 'info', title: '绩效表按月累积', text: '当月考核表 = 本月全部周报内容：每周生成时把本周条目并进去（同一事项只占一行，起止时间取并集），不会再把前几周内容冲掉；格式只写类别/内容/起止时间/是否完成/备注六列，其余一律不动。' },
+  { id: 'perfcheck', level: 'warn', title: '月底核对绩效表', text: '每次生成后自动对照本月各周周报核一遍当月表，缺的事项自动补齐；本周覆盖月末时就是月底核对。报告写在表旁边 *_核对.txt，也能在概览页手动点「核对本月绩效表」。' },
   { id: 'rate', level: 'warn', title: '接口限流', text: '研发平台 MCP 限 60 次/分钟；撞限会等 20 秒重试，生成一次通常 1~3 分钟，期间别重复点。' },
   { id: 'cancel', level: 'info', title: '已取消不写', text: '工单状态 cancelled / 任务「已取消」一律跳过。' },
   { id: 'engine', level: 'info', title: '引擎随插件走', text: '生成脚本在 service/engine/gen_weekly_text.py，配置与 Key 在 service/data/，输出在 service/data/reports/，不依赖外部目录。' },
@@ -577,6 +579,19 @@ const server = http.createServer(async (req, res) => {
         '--notify-dry-run', '--no-miss-file'], { timeout: 180000 });
       stateCache.at = 0;
       json(res, 200, { ok: r.code === 0, code: r.code, out: r.out.slice(-4000) });
+      return;
+    }
+
+    // 绩效表核对：对照本月各周周报，缺的补进当月表，报告写在表旁边
+    if (req.method === 'POST' && p === '/api/perf-check') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const py = findPython();
+      const args = [P.ENGINE, '--config', P.CONFIG, '--perf-check', '--perf-fix'];
+      if (body.month) args.push('--perf-month', String(body.month));
+      const r = await exec(py, args, { timeout: 180000, cwd: P.ENGINE_DIR });
+      stateCache.at = 0;
+      log(`perf-check code=${r.code}`);
+      json(res, 200, { ok: r.code === 0, code: r.code, out: (r.out || '').slice(-8000) });
       return;
     }
 

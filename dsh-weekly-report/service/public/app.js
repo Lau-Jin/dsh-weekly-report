@@ -544,6 +544,28 @@ function bindActions() {
     } catch (e) { toast('失败：' + e.message, 'err'); }
   };
 
+  // 绩效表核对：对照本月各周周报，缺的事项自动补进当月表
+  $('#btn-perf-check').onclick = async () => {
+    const pre = $('#perf-check-out');
+    const st = $('#perf-check-state');
+    const btn = $('#btn-perf-check');
+    pre.hidden = false;
+    pre.textContent = '正在核对：读本月各周周报，逐条比对当月绩效表…';
+    st.textContent = '';
+    btn.disabled = true;
+    try {
+      const r = await post('/api/perf-check', {});
+      pre.textContent = r.out || '(无输出)';
+      st.textContent = r.ok ? '通过' : '有需要看的项';
+      toast(r.ok ? '绩效表核对通过' : '绩效表核对有提示，看下面的报告', r.ok ? 'ok' : 'err');
+    } catch (e) {
+      pre.textContent = '失败：' + e.message;
+      toast('核对失败', 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   $('#btn-sched-remove').onclick = async () => {
     if (!confirm('删除计划任务「周报自动生成」？之后只能手动生成。')) return;
     try {

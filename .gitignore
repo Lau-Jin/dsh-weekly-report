@@ -56,8 +56,8 @@ Makefile
 # ---- 周报自动生成工具：凭据与运行产物，禁止入库 ----
 weekly_config.json
 weekly_config.json.bak
-yanfa_api_key.txt
-yanfa_api_key.txt.*
+api_key.txt
+api_key.txt.*
 *.bak-*
 __pycache__/
 *.pyc

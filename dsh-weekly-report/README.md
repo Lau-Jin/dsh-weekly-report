@@ -1,4 +1,4 @@
-﻿# dsh-weekly-report · 周报面板插件（自主版 v0.2.1）
+﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.0）
 
 **完全自主**：生成引擎、配置、API Key、输出目录全部在插件内，不再依赖 `D:\Reports` 里的脚本和配置。
 装进 DSH 后在**侧边栏**用，也能单独用浏览器打开。
@@ -114,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File D:\Tools\Lau-tool\dsh-weekly-report\ins
 |---|---|
 | 处理人 / 阈值 / MCP 地址 / 绩效表目录 | `D:\Reports\weekly_config.json` |
 | 邮件开关与 SMTP 全套（含授权码） | 同上 |
-| API Key | `D:\Reports\yanfa_api_key.txt` |
+| API Key | `D:\Reports\api_key.txt` |
 | 输出目录 | 旧配置里的 `out_dir`；存在就**沿用原周报目录**，保证周报继续落原处 |
 
 迁移后写入 `service/data/config.json`，**之后不再读旧文件**。
@@ -155,6 +155,7 @@ mklink /J "D:\Tools\Lau-tool\dsh-weekly-report" "D:\Tools\Lau-tool\dsh-weekly-re
 |---|---|
 | 健康状态 | 7 项体检，每项带 ✓ / ! 标记与说明，右上角显示「n/7 项正常」 |
 | 快捷操作 | **生成本周周报** / 只试运行 / 查看历史，一键直达 |
+| 绩效表核对 | 「核对本月绩效表（缺的自动补）」按钮 + 核对报告正文 |
 | 系统定时任务 | 状态、下次运行、是否指向插件引擎，附带接管/移除按钮 |
 | 最近一次生成 | 成功/失败徽标 + 时间 + 产物路径 |
 | 路径 | 插件/引擎/配置/Key/输出，每条带「复制」 |
@@ -190,7 +191,62 @@ mklink /J "D:\Tools\Lau-tool\dsh-weekly-report" "D:\Tools\Lau-tool\dsh-weekly-re
 搜索框即时过滤文件名；每条显示目录、条数、大小、时间，点「查看」在下方展开正文，可收起。
 
 ### 注意事项
-11 条内置规则，可按「全部 / 注意 / 重要」筛选，左侧色条区分级别。
+13 条内置规则，可按「全部 / 注意 / 重要」筛选，左侧色条区分级别。
+
+## 绩效表（月度考核表）：按月累积 + 月底核对
+
+**以前的问题**：每次生成拿当月表当模板就地重填，只写当周条目，前面几周的内容会被冲掉；
+一个月里跑几次，绩效表里就只剩最后一次。
+
+现在的口径（v0.7.0 起，引擎 `build_perf_xlsx` / `check_perf_xlsx`）：
+
+| 规则 | 说明 |
+|---|---|
+| 内容 = 本月全部周报 | 每周生成时把本周条目**并进**当月表，先读表里已有的行再合并 |
+| 同一事项一行 | 学校+事项（忽略空格标点）相同就合并：起止时间取并集、「是否完成」取或、备注（M 列）保留 |
+| 只写六列 | B 类别 / D 学校+事项 / J 开始 / K 结束 / L 是否完成 / M 备注；其它单元格、合并区域、字体、行高、列宽都不动 |
+| 行数不够自动加 | 超过模板任务行数时下移「工作任务考核」等区块，并同步校正 K4/M4 评分公式，版式不变 |
+| 生成后自动核对 | 每次生成都对照**本月各周周报文本**逐条比对：内容、起止时间、完成标记、格式；缺的自动补齐 |
+| 月底报告 | 本周覆盖月末（`we >= 月末-6 天`）时输出完整核对报告；上个月的绩效表还没核对过也会补一次 |
+
+核对报告写在绩效表旁边：`<绩效表名>_核对.txt`，长这样：
+
+```
+绩效表核对 · 2026年11月 · 张三
+核对时间：2026-11-30 22:01:03
+文件：D:\Perf\2026\2026年11月张三员工月度考核表-交付中心.xlsx
+
+一、内容（对照本月各周周报）
+  本月周报 3 篇：周报_2026-11-02_2026-11-08.txt、… 
+  周报事项 41 条（合并同一事项后 35 条）
+  表内事项 35 条
+  ✓ 周报里的事项都在表内
+  ✓ 起止时间与周报一致
+  ✓ 完成标记与周报进度一致
+  ✓ 没有重复行
+
+二、格式
+  ✓ 表头标题在（B2）  ✓ 处理人 张三（D3）  ✓ 考核月份 2026年11月（D4）  ✓ 填报时间已填（K3）
+  ✓ 35 行数据完整  ✓ 任务行连续  ✓ 合并单元格齐全  ✓ 字体统一 微软雅黑 10
+  ✓ 日期格式 yyyy/m/d  ✓ 考核区块位置正常  ✓ 考核评分公式指向考核区块
+
+结论：通过
+```
+
+手动核对（也是「月底检查」的兜底）：
+
+```powershell
+# 只核对当前月（快，不调接口；只读本周报目录 + 绩效表）
+python "<插件>\service\engine\gen_weekly_text.py" --config "<插件>\service\data\config.json" --perf-check
+
+# 核对并把周报里有、表里缺的补进去
+... --perf-check --perf-fix
+
+# 指定月份 / 额外与研发平台本月数据比对（要 Key）
+... --perf-check --perf-month 2026-11 --perf-platform
+```
+
+面板里也有按钮：概览 →「绩效表核对」→ **核对本月绩效表（缺的自动补）**。
 
 ## 定时任务接管
 
@@ -220,6 +276,7 @@ python.exe "<插件>\service\engine\gen_weekly_text.py" \
 | POST | `/api/fs/mkdir` | 新建文件夹（`{parent, name}`，名称拒绝 `\ / : * ? " < > \|`） |
 | GET/POST | `/api/schedule` | 查询 / `{action:'install'|'remove'}` |
 | POST | `/api/test-mail` | 试运行（不发信） |
+| POST | `/api/perf-check` | 核对当月绩效表（`{month?}`，缺的自动补），返回报告正文 |
 
 ## 手动运维
 
@@ -248,6 +305,26 @@ Invoke-RestMethod http://127.0.0.1:8798/api/state | ConvertTo-Json -Depth 4
 `service/engine/gen_weekly_text.py` 是桌面版脚本的复制件，**产物逐字节一致**（已比对 SHA256）。
 两边独立：改桌面版不会自动同步到插件，反之亦然。要同步就把新脚本复制进
 `service/engine/`（插件不需要重新安装，服务重启或直接生成即可生效）。
+
+## 公开脱敏版（对外开源 / 给同事装）
+
+| 用途 | 位置 |
+|---|---|
+| 自己用（真实数据、内部逻辑） | 私有仓库 `Lau-Jin/dsh-weekly-report`（检出 `D:\Tools\Lau-tool`） |
+| 对外开源、任何人可装 | 公开仓库 `Lau-Jin/dsh-weekly-report`（检出 `D:\Tools\Lau-tool-public`） |
+| 给同事（不给仓库权限） | `pack-plugin.ps1` 打的离线包 `dist\dsh-weekly-report-<版本>.zip` |
+
+公开版是**脱敏后的副本**，不是自动同步：改完私有版要手动跑一次
+
+```powershell
+# 只看会改哪些文件 + 脱敏自检（有无真实人名/域名/校名/本机路径残留）
+python dsh-weekly-report\tools\sanitize_public.py --check
+# 真正写进 D:\Tools\Lau-tool-public，再自己 commit/push
+python dsh-weekly-report\tools\sanitize_public.py --write
+```
+
+替换规则在脚本顶部 `RULES` 里（人名→张三、内部域名→mcp.example.com、本机路径→D:\Reports / D:\Perf / D:\Tools\Lau-tool、真实校名→示例…），
+`docs/screenshots`、`docs/同事安装说明.md`、`service/data` 一律不进公开版。
 
 ## 卸载
 

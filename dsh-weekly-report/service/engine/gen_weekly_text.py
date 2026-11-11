@@ -36,6 +36,10 @@
     # 5) 日常/定时任务：本周 + 自动挑表 + 自动归档 + 日志
     python gen_weekly_text.py --week current --auto-file --log
 
+    # 6) 绩效表核对（月底检查 / 随时抽查；只读周报与绩效表，不需要 API Key）
+    #    报告写在绩效表旁边 *_核对.txt；加 --perf-fix 把周报里有、表里缺的补进去
+    python gen_weekly_text.py --perf-check --perf-fix [--perf-month 2026-11]
+
 路径优先级：命令行 > 环境变量(WEEKLY_FOLDER/WEEKLY_TOKEN_FILE/WEEKLY_OUT_DIR)
             > weekly_config.json > 内置默认。
 weekly_config.json 中的相对路径以本脚本所在目录为基准，整个目录可直接拷到其他电脑。
@@ -51,6 +55,7 @@ weekly_config.json 中的相对路径以本脚本所在目录为基准，整个�
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -69,7 +74,7 @@ DEFAULT_LINK = "https://mcp.example.com/?tab=ticket-detail&ticketId={id}"
 DEFAULT_TASK_LINK = "https://mcp.example.com/?tab=task-detail&taskId={id}"
 TASK_LIST_TOOL = "task_list_my_tasks"
 TASK_DETAIL_TOOL = "task_get_task_detail"
-DEFAULT_TOKEN_FILE = r"D:\Reports\yanfa_api_key.txt"
+DEFAULT_TOKEN_FILE = r"D:\Reports\api_key.txt"
 DEFAULT_OUT_DIR = r"D:\Reports"
 DEFAULT_FOLDER = r"D:\Perf\2026"
 DEFAULT_HANDLER = "张三"
@@ -1534,8 +1539,52 @@ def collect_items(token, mcp_url, handler, ws, we, mcp_tool=None, mcp_args=None,
 
 
 # --------------------------------------------------------------------------
-# 绩效文档：套用月度考核表模板，内容 = 学校名称 + 工单名称
+# 绩效文档：本月全部周报内容 → 月度考核表（跨周累积，模板格式保持不变）
+#
+# 规则（2026-11-11 起）：
+#   · 绩效表 = 本月所有周报内容的合集；每周生成周报时把本周条目并进当月表；
+#   · 同一事项（学校+事项，忽略空格与标点）跨周只占一行：起止时间取并集、
+#     「是否完成」取或、备注（M 列）保留，不再因为每周重跑把前几周的内容冲掉；
+#   · 只写 B/D/J/K/L/M 六列，模板其它单元格、合并区域、字体、行高一概不动；
+#   · 每次生成后自检（对照本月各周周报文本）并补齐缺失；月底（本轮已覆盖月末）
+#     输出完整核对报告（内容 / 时间 / 完成标记 / 格式）。
 # --------------------------------------------------------------------------
+PERF_CAT_COL, PERF_CONTENT_COL = 2, 4            # 类别 / 学校+事项
+PERF_START_COL, PERF_END_COL = 10, 11            # 开始时间 / 结束时间
+PERF_DONE_COL, PERF_NOTE_COL = 12, 13            # 是否完成 / 备注
+
+
+def perf_sheet(wb):
+    """月度考核表所在工作表（模板里叫「月度考核」，没有就用最后一个）。"""
+    return wb["月度考核"] if "月度考核" in wb.sheetnames else wb[wb.sheetnames[-1]]
+
+
+def perf_month_text(year, month):
+    return f"{year}年{month}月"
+
+
+def perf_task_zone(ws):
+    """任务区：(起始行, 可填行数, 「工作任务考核」区块所在行)。"""
+    sec_row = None
+    for r in range(7, ws.max_row + 1):
+        v = ws.cell(r, PERF_CAT_COL).value
+        if isinstance(v, str) and "工作任务考核" in v:
+            sec_row = r
+            break
+    if sec_row is None:
+        sec_row = 22
+    return 7, max(1, sec_row - 7), sec_row
+
+
+def perf_path_for(folder, handler, year, month):
+    """当月绩效表路径：<绩效表目录>/<YYYY>/YYYY年M月<处理人>员工月度考核表-交付中心.xlsx"""
+    root = os.path.normpath(folder)
+    if re.fullmatch(r"\d{4}", os.path.basename(root)):
+        root = os.path.dirname(root)
+    return os.path.join(root, str(year),
+                        f"{year}年{month}月{handler}员工月度考核表-交付中心.xlsx")
+
+
 def _shift_rows_down(ws, at_row, n):
     """在 at_row 处插入 n 行：整体下移单元格、样式、行高与合并区域。"""
     from copy import copy as _copy
@@ -1588,36 +1637,210 @@ def _shift_rows_down(ws, at_row, n):
                 pass
 
 
-def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三"):
-    """复制模板，把「学校名称+工单名称」填进任务行；模板版式保持不变。"""
-    import openpyxl
-    from copy import copy as _copy
-    from datetime import datetime as _dt
+def read_perf_rows(ws, start=7, cap=None):
+    """读任务区里已有的条目（跨周累积、月底核对共用）。"""
+    if cap is None:
+        start, cap, _ = perf_task_zone(ws)
+    rows = []
+    for i in range(cap):
+        r = start + i
+        content = ws.cell(r, PERF_CONTENT_COL).value
+        cat = ws.cell(r, PERF_CAT_COL).value
+        if content is None:
+            continue
+        text = str(content).strip()
+        if not text:
+            continue
+        rows.append({
+            "category": str(cat).strip() if cat is not None else "",
+            "content": text,
+            "d1": to_date(ws.cell(r, PERF_START_COL).value),
+            "d2": to_date(ws.cell(r, PERF_END_COL).value),
+            "settled": str(ws.cell(r, PERF_DONE_COL).value or "").strip() == "是",
+            "note": ws.cell(r, PERF_NOTE_COL).value,
+        })
+    return rows
 
-    wb = openpyxl.load_workbook(template_path)
-    sheet = "月度考核" if "月度考核" in wb.sheetnames else wb.sheetnames[-1]
-    ws = wb[sheet]
 
-    # 任务区 = 第 7 行到「工作任务考核」区块之前，长度随模板而定
-    sec_row = None
-    for r in range(7, ws.max_row + 1):
-        v = ws.cell(r, 2).value
-        if isinstance(v, str) and "工作任务考核" in v:
-            sec_row = r
-            break
-    if sec_row is None:
-        sec_row = 22
-    cap = max(1, sec_row - 7)
+def items_to_perf_rows(items):
+    """周报条目 → 绩效表行（内容 = 学校名 + 事项，与模板填法一致）。"""
+    rows = []
+    for it in items or []:
+        content = f"{it.get('school') or ''}{it.get('subject') or ''}".strip()
+        if not content:
+            continue
+        note = it.get("note")
+        rows.append({
+            "category": (it.get("category") or "").strip(),
+            "content": content,
+            "d1": to_date(it.get("d1")),
+            "d2": to_date(it.get("d2")),
+            "settled": bool(it.get("settled")),
+            "note": None if note in (None, "", "无") else note,
+        })
+    return rows
 
-    n = len(items)
+
+def perf_key(content):
+    """同一事项的判定键：忽略空格、标点与大小写。"""
+    return norm(content) or (content or "").strip()
+
+
+def merge_perf_rows(*groups):
+    """把多组条目并成一个月度清单：同一事项只留一行（时间取并集、完成取或）。"""
+    merged, index = [], {}
+    for group in groups:
+        for row in group or []:
+            content = (row.get("content") or "").strip()
+            if not content:
+                continue
+            key = perf_key(content)
+            cur = index.get(key)
+            if cur is None:
+                copy_row = dict(row)
+                copy_row["content"] = content
+                index[key] = copy_row
+                merged.append(copy_row)
+                continue
+            d1s = [d for d in (cur.get("d1"), row.get("d1")) if d]
+            d2s = [d for d in (cur.get("d2"), row.get("d2")) if d]
+            cur["d1"] = min(d1s) if d1s else None
+            cur["d2"] = max(d2s) if d2s else None
+            cur["settled"] = bool(cur.get("settled")) or bool(row.get("settled"))
+            if not cur.get("category"):
+                cur["category"] = (row.get("category") or "").strip()
+            if (cur.get("note") in (None, "", "无")) and (row.get("note") not in (None, "", "无")):
+                cur["note"] = row["note"]
+    merged.sort(key=lambda r: (r.get("d1") or date.min,
+                               perf_key(r.get("content")), r.get("content") or ""))
+    return merged
+
+
+def _write_task_rows(ws, rows, start=7):
+    """把条目写进任务区：只动 B/D/J/K/L/M 六列；行数不够时下移考核区块，版面不变。"""
+    from openpyxl.cell.cell import MergedCell
+    from openpyxl.styles import Font as _Font
+
+    _, cap, sec_row = perf_task_zone(ws)
+    n = len(rows)
     if n > cap:
         _shift_rows_down(ws, sec_row, n - cap)
         cap = n
-        sec_row = 7 + cap
 
-    start_row = 7
+    owned = (PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL,
+             PERF_END_COL, PERF_DONE_COL, PERF_NOTE_COL)
+    for i in range(cap):
+        r = start + i
+        for c in owned:
+            cell = ws.cell(r, c)
+            if isinstance(cell, MergedCell):
+                continue
+            cell.value = None
 
-    # 基本信息
+    for i, row in enumerate(rows):
+        r = start + i
+        ws.cell(r, PERF_CAT_COL).value = row.get("category") or None
+        ws.cell(r, PERF_CONTENT_COL).value = row.get("content")
+        d1, d2 = row.get("d1"), row.get("d2")
+        c1, c2 = ws.cell(r, PERF_START_COL), ws.cell(r, PERF_END_COL)
+        if d1:
+            c1.value = datetime.combine(d1, datetime.min.time())
+            c1.number_format = "yyyy/m/d"
+        if d2:
+            c2.value = datetime.combine(d2, datetime.min.time())
+            c2.number_format = "yyyy/m/d"
+        ws.cell(r, PERF_DONE_COL).value = "是" if row.get("settled") else "否"
+        if row.get("note") not in (None, "", "无"):
+            ws.cell(r, PERF_NOTE_COL).value = row["note"]
+
+    # 统一字体：填写的单元格都用微软雅黑 10 号，颜色沿用模板基准色，
+    # 避免部分行继承了默认字体（宋体/其它颜色）导致观感不一致
+    base = ws.cell(start, PERF_CAT_COL).font
+    color = base.color if (base.color and base.color.type == "rgb") else None
+    for i in range(cap):
+        r = start + i
+        for c in (PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL,
+                  PERF_END_COL, PERF_DONE_COL):
+            cell = ws.cell(r, c)
+            if isinstance(cell, MergedCell):
+                continue
+            cell.font = _Font(name="微软雅黑", size=10, bold=False,
+                              italic=False, color=color)
+
+
+def _score_formulas(ws):
+    """按月表的三个考核区块算出「考核评分 / 最终评分」应有的公式。
+
+    模板里 K4 = SUM(M{60%区块评分首行}:N{末行})、M4 = 60%*0.6 + 30%*0.3 + 10%*0.1；
+    行数变化（任务区扩容）后这些引用必须跟着区块走，不能还指着任务区。
+    """
+    secs = {}
+    for r in range(7, ws.max_row + 1):
+        v = ws.cell(r, PERF_CAT_COL).value
+        if not isinstance(v, str):
+            continue
+        if "工作任务考核" in v:
+            secs.setdefault("task", r)
+        elif "工作绩效考核" in v:
+            secs.setdefault("work", r)
+        elif "品质" in v:
+            secs.setdefault("moral", r)
+    if len(secs) != 3:
+        return None
+    s1, s2, s3 = secs["task"], secs["work"], secs["moral"]
+    total = f"SUM(M{s1 + 2}:N{s1 + 6})"
+    return f"={total}", (f"={total}*0.6+SUM(M{s2 + 2}:N{s2 + 7})*0.3"
+                         f"+SUM(M{s3 + 2}:N{s3 + 5})*0.1")
+
+
+def _fix_score_formulas(ws):
+    """把考核评分公式校正到当前区块位置；改了就返回 True。"""
+    wanted = _score_formulas(ws)
+    if not wanted:
+        return False
+    changed = False
+    for coord, val in (("K4", wanted[0]), ("M4", wanted[1])):
+        cell = ws[coord]
+        if cell.value != val:
+            cell.value = val
+            changed = True
+    return changed
+
+
+def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三",
+                    accumulate=True):
+    """把本月条目写进月度考核表（模板版式保持不变，只填任务行）。
+
+    template_path 与 out_path 是同一个文件时（就地重填），先读出表里已有的行再合并，
+    于是每周生成只会在当月表上追加/更新，不会把前几周内容冲掉。
+    返回实际写出的路径（文件被 Excel 占用时会写成 *_新.xlsx）。
+    """
+    import openpyxl
+    from datetime import datetime as _dt
+
+    wb = openpyxl.load_workbook(template_path)
+    ws = perf_sheet(wb)
+    start, cap, _sec = perf_task_zone(ws)
+
+    same_file = os.path.abspath(str(template_path)) == os.path.abspath(str(out_path))
+    tag = perf_month_text(year, month)
+    existing = []
+    if accumulate and same_file:
+        d4 = ws.cell(4, 4).value
+        if isinstance(d4, str) and tag in d4:
+            existing = read_perf_rows(ws, start, cap)
+        else:
+            print(f"提示：表头月份（{d4}）不是 {tag}，本次按模板重填任务行（不累积旧行）")
+    elif accumulate and os.path.isfile(out_path):
+        print("提示：用外部模板生成，表里已有的条目未参与累积（别把 --perf-template 当日常用法）")
+
+    before = {perf_key(r["content"]) for r in existing if r.get("content")}
+    rows = merge_perf_rows(existing, items_to_perf_rows(items))
+    added = sum(1 for r in rows if perf_key(r.get("content")) not in before)
+
+    _write_task_rows(ws, rows)
+
+    # 基本信息：处理人 / 考核月份 / 填报时间
     try:
         ws["D3"] = handler
         last = 31 if month in (1, 3, 5, 7, 8, 10, 12) else (30 if month != 2 else 28)
@@ -1626,38 +1849,9 @@ def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三
     except Exception:
         pass
 
-    for i in range(cap):
-        r = start_row + i
-        ws.cell(r, 2).value = None
-        ws.cell(r, 4).value = None
-        ws.cell(r, 10).value = None
-        ws.cell(r, 11).value = None
-        ws.cell(r, 12).value = None
-
-    for i, it in enumerate(items):
-        r = start_row + i
-        ws.cell(r, 2).value = it["category"]
-        ws.cell(r, 4).value = f"{it['school']}{it['subject']}"
-        try:
-            ws.cell(r, 10).value = _dt.strptime(it["d1"], "%Y-%m-%d")
-            ws.cell(r, 11).value = _dt.strptime(it["d2"], "%Y-%m-%d")
-            ws.cell(r, 10).number_format = "yyyy/m/d"
-            ws.cell(r, 11).number_format = "yyyy/m/d"
-        except Exception:
-            pass
-        ws.cell(r, 12).value = "是" if it.get("settled") else "否"
-
-    # 统一字体：所有填写的单元格都用微软雅黑 10 号，颜色沿用模板基准色，
-    # 避免部分行继承了默认字体（宋体/其它颜色）导致观感不一致
-    from openpyxl.styles import Font as _Font
-    base = ws.cell(start_row, 2).font
-    color = base.color if (base.color and base.color.type == "rgb") else None
-    for i in range(cap):
-        r = start_row + i
-        for c in (2, 4, 10, 11, 12):
-            cell = ws.cell(r, c)
-            cell.font = _Font(name="微软雅黑", size=10, bold=False,
-                              italic=False, color=color)
+    # 行数变了，考核评分公式要跟着区块走（模板本来对得上时这句话什么也不改）
+    if _fix_score_formulas(ws):
+        print("已校正考核评分公式（K4/M4）指向本次的考核区块")
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     try:
@@ -1668,8 +1862,383 @@ def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三
         print(f"警告：{out_path} 正被 Excel 占用，已改写到 {alt}，"
               f"关闭 Excel 后重跑即可覆盖原文件")
         return alt
-    print(f"绩效文档：{out_path}（{n} 条）")
+    print(f"绩效文档：{out_path}（本月共 {len(rows)} 条，本次新增 {added} 条，"
+          f"沿用表内原有 {len(existing)} 条）")
     return out_path
+
+
+# --------------------------------------------------------------------------
+# 绩效表核对：内容对本月各周周报、时间、完成标记、格式
+# --------------------------------------------------------------------------
+_WEEK_FILE_RE = re.compile(r"周报_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.txt$")
+_REPORT_TIME_RE = re.compile(
+    r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    r"(?:\s*[-~—–至到]\s*(?:(\d{4})年)?(?:(\d{1,2})月)?(\d{1,2})日)?")
+
+
+def parse_report_time(text):
+    """「2026年11月9日」/「2026年11月9日-15日」/「2026年11月9日-12月15日」→ (d1, d2)。"""
+    m = _REPORT_TIME_RE.search(text or "")
+    if not m:
+        return None, None
+    y, mo, d, y2, mo2, d2 = m.groups()
+    try:
+        d1 = date(int(y), int(mo), int(d))
+        if not d2:
+            return d1, d1
+        return d1, date(int(y2 or y), int(mo2 or mo), int(d2))
+    except ValueError:
+        return None, None
+
+
+def parse_weekly_report(path):
+    """解析一份周报 txt（引擎输出的固定格式），返回条目列表。"""
+    with open(path, "r", encoding="utf-8-sig") as f:
+        lines = f.read().splitlines()
+    items, cur = [], None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        head = re.match(r"^【(.+?)】$", stripped)
+        if head and not line.startswith((" ", "\t")):
+            if cur and cur.get("subject"):
+                items.append(cur)
+            cur = {"category": head.group(1).strip(), "school": "",
+                   "time": "", "subject": "", "work": "", "progress": ""}
+            continue
+        if cur is None:
+            continue
+        if not line.startswith((" ", "\t")):
+            if not cur["school"]:
+                cur["school"] = stripped
+            continue
+        for key, label in (("time", "时间"), ("subject", "事项"),
+                           ("work", "工作内容"), ("progress", "进度")):
+            m = re.match(rf"^{label}\s*[:：]\s*(.*)$", stripped)
+            if m:
+                cur[key] = m.group(1).strip()
+                break
+    if cur and cur.get("subject"):
+        items.append(cur)
+
+    out = []
+    for it in items:
+        d1, d2 = parse_report_time(it["time"])
+        out.append({
+            "category": it["category"],
+            "school": it["school"],
+            "subject": it["subject"],
+            "d1": d1, "d2": d2,
+            "settled": it["progress"].startswith("100"),
+            "note": None,
+            "file": os.path.basename(path),
+        })
+    return out
+
+
+def weekly_reports_for_month(year, month):
+    """本月各周的周报文件：按「周结束日期所在月」归属（与绩效表的月份口径一致）。"""
+    out = []
+    if not os.path.isdir(OUT_DIR):
+        return out
+    folders = [OUT_DIR]
+    try:
+        folders += [os.path.join(OUT_DIR, d) for d in os.listdir(OUT_DIR)]
+    except OSError:
+        pass
+    for folder in folders:
+        if not os.path.isdir(folder):
+            continue
+        for path in glob.glob(os.path.join(folder, "周报_*.txt")):
+            m = _WEEK_FILE_RE.search(os.path.basename(path))
+            if not m:
+                continue
+            try:
+                end = datetime.strptime(m.group(2), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if (end.year, end.month) == (year, month):
+                out.append(path)
+    return sorted(set(out))
+
+
+def collect_week_items(year, month):
+    """读本月各周周报，返回 (条目列表, 文件名列表)。"""
+    items, names = [], []
+    for path in weekly_reports_for_month(year, month):
+        try:
+            got = parse_weekly_report(path)
+        except Exception as e:
+            print(f"提示：周报读取失败 {os.path.basename(path)}：{e}")
+            continue
+        if not got:
+            print(f"提示：周报里没解析出条目 {os.path.basename(path)}")
+            continue
+        items.extend(got)
+        names.append(os.path.basename(path))
+    return items, names
+
+
+def _perf_row_line(row):
+    d1, d2 = row.get("d1"), row.get("d2")
+    when = ""
+    if d1 and d2:
+        when = f"，{d1}~{d2}" if d1 != d2 else f"，{d1}"
+    return f"{row.get('content') or ''}{when}"
+
+
+def _range_covers(table_row, expected_row):
+    """表里的时间范围是否覆盖周报要求的时间范围。"""
+    t1, t2 = table_row.get("d1"), table_row.get("d2")
+    e1, e2 = expected_row.get("d1"), expected_row.get("d2")
+    if e1 and (not t1 or t1 > e1):
+        return False
+    if e2 and (not t2 or t2 < e2):
+        return False
+    return True
+
+
+def check_perf_xlsx(path, year, month, handler="张三", week_items=None,
+                    week_files=None, platform_items=None, fix=False):
+    """核对绩效表：内容（对照本月周报）/ 时间 / 完成标记 / 格式。
+
+    返回 (是否通过, 报告文本)。fix=True 时把周报里有的、表里缺的事项补进去。
+    """
+    import openpyxl
+
+    tag = perf_month_text(year, month)
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    head = [f"绩效表核对 · {tag} · {handler}",
+            f"核对时间：{stamp}",
+            f"文件：{path}"]
+    if not os.path.isfile(path):
+        return False, "\n".join(head + ["", "结论：不通过（找不到绩效表文件）"])
+
+    wb = openpyxl.load_workbook(path)
+    ws = perf_sheet(wb)
+    start, cap, sec_row = perf_task_zone(ws)
+    raw_rows = read_perf_rows(ws, start, cap)
+    problems, tips, content_lines, fix_lines = [], [], [], []
+
+    # ---- 先修再核：把本月周报里的事项并进表（缺的补、时间取并集、完成取或） ----
+    if fix and week_items is not None:
+        expected = merge_perf_rows(items_to_perf_rows(week_items))
+        merged = merge_perf_rows(raw_rows, expected)
+        before = {perf_key(r["content"]): r for r in raw_rows}
+        after = {perf_key(r["content"]): r for r in merged}
+        added = [after[k] for k in after if k not in before]
+        updated = [after[k] for k in after if k in before and after[k] != before[k]]
+        if added or updated:
+            _write_task_rows(ws, merged)
+            _fix_score_formulas(ws)
+            target = path
+            try:
+                wb.save(path)
+            except PermissionError:
+                target = os.path.splitext(path)[0] + "_新.xlsx"
+                try:
+                    wb.save(target)
+                    head.append(f"（原文件被 Excel 占用，修补结果写到 {os.path.basename(target)}；"
+                                f"关掉 Excel 后再点一次即可直接写回原文件）")
+                except Exception as e:
+                    target = None
+                    problems.append(f"修补失败：{e}")
+            if target:
+                wb = openpyxl.load_workbook(target)
+                ws = perf_sheet(wb)
+                start, cap, sec_row = perf_task_zone(ws)
+                raw_rows = read_perf_rows(ws, start, cap)
+                if added:
+                    more = "…" if len(added) > 10 else ""
+                    fix_lines.append(f"自动补齐 {len(added)} 条："
+                                     + "；".join(_perf_row_line(r) for r in added[:10]) + more)
+                if updated:
+                    more = "…" if len(updated) > 10 else ""
+                    fix_lines.append(f"校正 {len(updated)} 条（起止时间 / 完成标记）："
+                                     + "；".join(r["content"] for r in updated[:10]) + more)
+
+    table = merge_perf_rows(raw_rows)
+
+    if week_items is not None:
+        expected = merge_perf_rows(items_to_perf_rows(week_items))
+        by_key = {perf_key(r["content"]): r for r in table}
+        exp_key = {perf_key(r["content"]): r for r in expected}
+        missing = [r for k, r in exp_key.items() if k not in by_key]
+        extra = [r for k, r in by_key.items() if k not in exp_key]
+        date_bad, done_bad = [], []
+        for k, exp in exp_key.items():
+            got = by_key.get(k)
+            if not got:
+                continue
+            if not _range_covers(got, exp):
+                date_bad.append((got, exp))
+            if bool(got["settled"]) != bool(exp["settled"]):
+                done_bad.append((got, exp))
+        dup_keys = {}
+        for r in raw_rows:
+            k = perf_key(r["content"])
+            dup_keys[k] = dup_keys.get(k, 0) + 1
+        dups = [k for k, c in dup_keys.items() if c > 1]
+
+        content_lines.append(f"  本月周报 {len(week_files or [])} 篇"
+                             + (f"：{'、'.join(week_files)}" if week_files else ""))
+        content_lines.append(f"  周报事项 {len(week_items)} 条"
+                             f"（合并同一事项后 {len(expected)} 条）")
+        content_lines.append(f"  表内事项 {len(table)} 条")
+        if missing:
+            problems.append(f"缺少 {len(missing)} 条周报事项")
+            content_lines.append(f"  ✗ 缺少 {len(missing)} 条（周报里有、表里没有）")
+            content_lines += [f"    - {_perf_row_line(r)}" for r in missing[:30]]
+        else:
+            content_lines.append("  ✓ 周报里的事项都在表内")
+        if date_bad:
+            problems.append(f"时间不一致 {len(date_bad)} 条")
+            content_lines.append(f"  ✗ 起止时间与周报不一致 {len(date_bad)} 条")
+            for got, exp in date_bad[:30]:
+                content_lines.append(
+                    f"    - {exp['content']}：表里 {got['d1']}~{got['d2']}，"
+                    f"周报 {exp['d1']}~{exp['d2']}")
+        else:
+            content_lines.append("  ✓ 起止时间与周报一致")
+        if done_bad:
+            problems.append(f"完成标记不一致 {len(done_bad)} 条")
+            content_lines.append(f"  ✗ 完成标记与周报进度不一致 {len(done_bad)} 条")
+            for got, exp in done_bad[:30]:
+                content_lines.append(
+                    f"    - {exp['content']}：表里 {'是' if got['settled'] else '否'}，"
+                    f"周报进度 {'100%' if exp['settled'] else '未完成'}")
+        else:
+            content_lines.append("  ✓ 完成标记与周报进度一致")
+        if dups:
+            problems.append(f"表内重复 {len(dups)} 条")
+            content_lines.append(f"  ✗ 同一事项出现多行 {len(dups)} 条")
+            content_lines += [f"    - {k}" for k in dups[:10]]
+        else:
+            content_lines.append("  ✓ 没有重复行")
+        if extra:
+            tips.append(f"表里另有 {len(extra)} 条不在本月周报里（可能是手工补录或往月遗留，未动）")
+            content_lines.append(f"  · 表里多出 {len(extra)} 条（周报里没有）")
+            content_lines += [f"    - {_perf_row_line(r)}" for r in extra[:10]]
+    else:
+        content_lines.append(f"  表内事项 {len(table)} 条（本次没有可比对的本月周报）")
+
+    # ---- 格式 ----
+    fmt_lines, fmt_ok = [], True
+
+    def mark(cond, ok_text, bad_text):
+        nonlocal fmt_ok
+        if cond:
+            fmt_lines.append("  ✓ " + ok_text)
+        else:
+            fmt_lines.append("  ✗ " + bad_text)
+            problems.append(bad_text)
+            fmt_ok = False
+
+    mark(bool(ws.cell(2, 2).value), "表头标题在（B2）", "表头标题丢了（B2 为空）")
+    mark(str(ws.cell(3, 4).value or "").strip() == str(handler).strip(),
+         f"处理人 {handler}（D3）",
+         f"处理人不是 {handler}（D3={ws.cell(3, 4).value}）")
+    mark(tag in str(ws.cell(4, 4).value or ""), f"考核月份 {tag}（D4）",
+         f"考核月份不是 {tag}（D4={ws.cell(4, 4).value}）")
+    mark(ws.cell(3, 11).value is not None, "填报时间已填（K3）", "填报时间为空（K3）")
+
+    incomplete = []
+    for i, row in enumerate(table):
+        r = start + i
+        if not (row.get("content") and row.get("category")
+                and row.get("d1") and row.get("d2")):
+            incomplete.append(r)
+    mark(not incomplete,
+         f"{len(table)} 行数据完整（类别 / 内容 / 起止时间 / 是否完成）",
+         f"{len(incomplete)} 行数据不完整：第 {'、'.join(map(str, incomplete))} 行")
+
+    used = [start + i for i in range(cap)
+            if ws.cell(start + i, PERF_CONTENT_COL).value not in (None, "")]
+    gap = bool(used) and used != list(range(used[0], used[0] + len(used)))
+    mark(not gap,
+         f"任务行连续（第 {used[0]}–{used[-1]} 行）" if used else "任务行没有数据",
+         "任务行中间有空洞，打印出来会断开")
+
+    merged_ranges = {str(rng) for rng in ws.merged_cells.ranges}
+    broken = [rng for i in range(len(table)) for rng in
+              (f"B{start + i}:C{start + i}", f"D{start + i}:I{start + i}",
+               f"M{start + i}:N{start + i}") if rng not in merged_ranges]
+    mark(not broken, "合并单元格齐全（B:C / D:I / M:N）",
+         f"合并单元格缺失：{'、'.join(broken[:8])}")
+
+    fonts_bad, fmt_bad = [], []
+    for i in range(len(table)):
+        r = start + i
+        for c in (PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL,
+                  PERF_END_COL, PERF_DONE_COL):
+            cell = ws.cell(r, c)
+            if (cell.font.name or "") != "微软雅黑" or (cell.font.sz or 0) != 10:
+                fonts_bad.append(cell.coordinate)
+        for c in (PERF_START_COL, PERF_END_COL):
+            if "y" not in (ws.cell(r, c).number_format or ""):
+                fmt_bad.append(ws.cell(r, c).coordinate)
+    mark(not fonts_bad, "字体统一（微软雅黑 10 号）",
+         f"字体不一致：{'、'.join(fonts_bad[:8])}")
+    mark(not fmt_bad, "日期格式 yyyy/m/d", f"日期格式不对：{'、'.join(fmt_bad[:8])}")
+
+    sec_val = ws.cell(sec_row, PERF_CAT_COL).value
+    mark(isinstance(sec_val, str) and "工作任务考核" in sec_val,
+         f"考核区块位置正常（第 {sec_row} 行）",
+         f"考核区块位置异常（第 {sec_row} 行不是「工作任务考核」）")
+
+    wanted = _score_formulas(ws)
+    if wanted:
+        mark(ws["K4"].value == wanted[0] and ws["M4"].value == wanted[1],
+             "考核评分公式指向考核区块（K4/M4）",
+             f"考核评分公式没跟着区块走（K4={ws['K4'].value} / M4={ws['M4'].value}）")
+
+    # ---- 研发平台比对（只提示，不参与结论） ----
+    plat_lines = []
+    if platform_items:
+        plat_exp = merge_perf_rows(items_to_perf_rows(platform_items))
+        keys = {perf_key(r["content"]) for r in table}
+        plat_missing = [r for r in plat_exp if perf_key(r["content"]) not in keys]
+        plat_lines.append(f"  平台本月事项 {len(plat_exp)} 条，"
+                          f"表内缺 {len(plat_missing)} 条")
+        if plat_missing:
+            tips.append(f"平台本月还有 {len(plat_missing)} 条不在表里"
+                        f"（多半是还没生成到对应周的周报，未自动补）")
+            plat_lines += [f"    · {_perf_row_line(r)}" for r in plat_missing[:20]]
+
+    # ---- 补齐（已在开头做完，这里只写进报告） ----
+    conclusion = "通过" if not problems else f"不通过（{len(problems)} 项待处理）"
+    out = head + [""] + ["一、内容（对照本月各周周报）"] + content_lines
+    out += [""] + ["二、格式"] + fmt_lines
+    if plat_lines:
+        out += [""] + ["三、研发平台比对（仅供参考）"] + plat_lines
+    if tips:
+        out += [""] + ["· 提示（不算错误）"] + [f"  - {t}" for t in tips]
+    if fix_lines:
+        out += [""] + ["· 本次顺手修补"] + [f"  - {t}" for t in fix_lines]
+    out += ["", f"结论：{conclusion}"]
+    return not problems, "\n".join(out)
+
+
+def perf_check_report(perf_path, year, month, handler="张三", platform_items=None,
+                      fix=False, save_report=True):
+    """跑一次核对，打印报告并写旁边同名 _核对.txt。返回是否通过。"""
+    week_items, week_files = collect_week_items(year, month)
+    ok, text = check_perf_xlsx(perf_path, year, month, handler,
+                               week_items=week_items, week_files=week_files,
+                               platform_items=platform_items, fix=fix)
+    print("")
+    print(text)
+    print("")
+    if save_report:
+        report = os.path.splitext(perf_path)[0] + "_核对.txt"
+        try:
+            with open(report, "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+            print(f"核对报告：{report}")
+        except Exception as e:
+            print(f"提示：核对报告写入失败：{e}")
+    return ok
 
 
 # --------------------------------------------------------------------------
@@ -2482,7 +3051,7 @@ def write_config_template(path=None, force=False):
         print(f"已备份原配置：{path}.bak")
     tpl = {
         "folder": DEFAULT_FOLDER,
-        "token_file": "yanfa_api_key.txt",
+        "token_file": "api_key.txt",
         "out_dir": "周报",
         "handler": DEFAULT_HANDLER,
         "threshold": DEFAULT_THRESHOLD,
@@ -2542,6 +3111,13 @@ def main():
                     help="按周期自动生成绩效文档到 输出目录\\绩效\\YYYY年MM月绩效_学校工单.xlsx")
     ap.add_argument("--perf-template", help="绩效文档模板（默认取当月的月度考核表）")
     ap.add_argument("--perf-month", help="绩效文档月份 YYYY-MM，默认取周期所在月")
+    ap.add_argument("--perf-check", action="store_true",
+                    help="核对当月绩效表：与本月各周周报逐条比对（内容/时间/完成标记/格式），"
+                         "报告写在表旁边 *_核对.txt")
+    ap.add_argument("--perf-fix", action="store_true",
+                    help="配合 --perf-check：把周报里有、表里缺的事项补进去")
+    ap.add_argument("--perf-platform", action="store_true",
+                    help="配合 --perf-check：额外与研发平台本月数据比对（只提示，需 API Key）")
     ap.add_argument("--list-replies", action="store_true",
                     help="列出收件箱中标题含关键词的邮件（排查回复为什么没生效）")
     ap.add_argument("--apply-confirmations", action="store_true",
@@ -2585,6 +3161,32 @@ def main():
 
     if args.log:
         enable_log()
+
+    if args.perf_check:
+        # 单独核对：不影响周报生成，也不需要周期参数
+        if args.perf_month:
+            y, m = [int(x) for x in args.perf_month.split("-")]
+        else:
+            today = _today_cn()
+            y, m = today.year, today.month
+        check_path = args.perf_xlsx or perf_path_for(folder, handler, y, m)
+        platform_items = None
+        if args.perf_platform:
+            token_arg = args.mcp_token
+            if not token_arg and os.path.isfile(TOKEN_FILE):
+                token_arg = TOKEN_FILE
+            if not token_arg:
+                raise SystemExit("--perf-platform 需要 API Key：--mcp-token 或 api_key.txt")
+            ms = date(y, m, 1)
+            me = (date(y + (1 if m == 12 else 0), (m % 12) + 1, 1) - timedelta(days=1))
+            platform_items = collect_items(
+                resolve_token(token_arg), mcp_url, handler, ms, me,
+                mcp_tool=args.mcp_tool,
+                mcp_args=json.loads(args.mcp_args) if args.mcp_args else {},
+                with_tasks=not args.no_tasks)
+        ok = perf_check_report(check_path, y, m, handler,
+                               platform_items=platform_items, fix=args.perf_fix)
+        sys.exit(0 if ok else 2)
 
     if args.list_replies:
         ic = _imap_cfg(cfg)
@@ -2679,7 +3281,7 @@ def main():
             token_arg = TOKEN_FILE
             print(f"使用默认 API Key：{TOKEN_FILE}")
         if not token_arg:
-            raise SystemExit("工单模式需要 API Key：--mcp-token 或 yanfa_api_key.txt")
+            raise SystemExit("工单模式需要 API Key：--mcp-token 或 api_key.txt")
         token = resolve_token(token_arg)
         data_args = json.loads(args.mcp_args) if args.mcp_args else {}
         items = collect_items(token, mcp_url, handler, ws, we,
@@ -2707,32 +3309,43 @@ def main():
                     print(f"注意：周期跨月，绩效文档按 {y}年{m}月 生成"
                           f"（可用 --perf-month 指定）")
             if not perf_out:
-                perf_root = os.path.normpath(folder)
-                if re.fullmatch(r"\d{4}", os.path.basename(perf_root)):
-                    perf_root = os.path.dirname(perf_root)
-                perf_out = os.path.join(
-                    perf_root, str(y),
-                    f"{y}年{m}月{handler}员工月度考核表-交付中心.xlsx")
+                perf_out = perf_path_for(folder, handler, y, m)
             if not os.path.isdir(folder):
                 print(f"提示：绩效目录不存在（{folder}），本次跳过绩效文档")
             else:
                 ms = date(y, m, 1)
                 me = (date(y + (1 if m == 12 else 0), (m % 12) + 1, 1)
                       - timedelta(days=1))
-                if ms <= ws and we <= me:
-                    m_items = items
-                else:
+                full_month = not (ms <= ws and we <= me)
+                if full_month:
                     m_items = collect_items(token, mcp_url, handler, ms, me,
                                             mcp_tool=args.mcp_tool,
                                             mcp_args=data_args,
                                             with_tasks=not args.no_tasks)
+                else:
+                    m_items = items
                 if args.perf_template:
                     tpl = args.perf_template
                 elif os.path.isfile(perf_out):
-                    tpl = perf_out          # 当月表已存在 → 就地重填
+                    tpl = perf_out          # 当月表已存在 → 就地累积（先读旧行再合并）
                 else:
                     tpl = auto_pick_xlsx(folder, ms)
-                build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
+                built = build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
+
+                # 自检：对照本月各周周报补齐缺失；本周覆盖月末时就是月底核对
+                month_end_week = we >= me - timedelta(days=6)
+                perf_check_report(built, y, m, handler, fix=True,
+                                  platform_items=(m_items if full_month else None))
+                if month_end_week:
+                    print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
+
+                # 上个月的绩效表若还没核对过，顺手补一次（纯文本比对，不额外调接口）
+                py_, pm_ = (y - 1, 12) if m == 1 else (y, m - 1)
+                prev_out = perf_path_for(folder, handler, py_, pm_)
+                if (os.path.isfile(prev_out)
+                        and not os.path.isfile(os.path.splitext(prev_out)[0] + "_核对.txt")):
+                    print(f"上个月（{py_}年{pm_}月）绩效表还没有核对报告，补一次核对")
+                    perf_check_report(prev_out, py_, pm_, handler, fix=True)
 
         n = _notify_cfg(cfg)
         if args.notify or n["enabled"]:

@@ -64,6 +64,24 @@
 
       <div class="wr-card">
         <div class="wr-card__head">
+          <span class="wr-card__title">绩效表核对</span>
+          <span class="wr-card__hint" id="perf-check-hint">月底必做</span>
+        </div>
+        <div class="wr-card__body">
+          <p class="wr-field__tip" style="margin:0 0 10px">
+            对照本月各周周报逐条核对当月绩效表：内容、起止时间、完成标记、格式；缺的事项顺手补进表里。
+            每周生成时会自动做一次，这里可以随时手动再核。
+          </p>
+          <div class="wr-actions">
+            <button class="wr-btn" id="btn-perf-check">核对本月绩效表（缺的自动补）</button>
+            <span class="wr-field__hint" id="perf-check-state"></span>
+          </div>
+          <pre class="wr-pre" id="perf-check-out" hidden style="margin-top:10px;max-height:38vh"></pre>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head">
           <span class="wr-card__title">系统定时任务</span>
           <span class="wr-card__hint" id="sched-hint"></span>
         </div>
