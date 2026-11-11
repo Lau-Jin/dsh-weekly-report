@@ -42,7 +42,7 @@ $stagePlugin = Join-Path $stage "dsh-weekly-report"
 New-Item -ItemType Directory -Force $stagePlugin | Out-Null
 
 # ---------------------------------------------------------------- 收集文件
-$excludeDirs = @("service\data", "__pycache__", "node_modules", ".git")
+$excludeDirs = @("service\data", "__pycache__", "node_modules", ".git", "tools")
 $excludeFilePatterns = @("*.log", "*.bak-*", "*.pyc", "_t*.html", "_shot.html")
 if ($NoScreenshots) { $excludeDirs += "docs\screenshots" }
 
