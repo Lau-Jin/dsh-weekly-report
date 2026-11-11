@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>周报面板</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wr-root">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="wr-head">
+    <div class="wr-brand">
+      <span class="wr-brand__name">周报</span>
+      <span class="wr-status" id="status">连接中…</span>
+    </div>
+    <div class="wr-head__actions">
+      <button class="wr-iconbtn" id="btn-refresh" title="刷新状态" aria-label="刷新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button class="wr-iconbtn" id="btn-open" title="在新窗口打开" aria-label="新窗口">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ================= 页签 ================= -->
+  <nav class="wr-tabs" id="tabs" role="tablist">
+    <button class="wr-tab is-active" data-tab="overview" role="tab">概览</button>
+    <button class="wr-tab" data-tab="config" role="tab">配置</button>
+    <button class="wr-tab" data-tab="run" role="tab">生成</button>
+    <button class="wr-tab" data-tab="reports" role="tab">历史</button>
+    <button class="wr-tab" data-tab="notes" role="tab">注意事项<span class="wr-tab__badge" id="notes-badge">0</span></button>
+  </nav>
+
+  <main class="wr-body">
+
+    <!-- ================= 概览 ================= -->
+    <section class="wr-pane is-active" data-pane="overview">
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">健康状态</span>
+          <span class="wr-card__hint" id="checks-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div class="wr-checks" id="checks"></div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head"><span class="wr-card__title">快捷操作</span></div>
+        <div class="wr-card__body">
+          <div class="wr-actions">
+            <button class="wr-btn wr-btn--primary" data-quick="run-current">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              生成本周周报
+            </button>
+            <button class="wr-btn" data-quick="run-dry">只试运行（不发信）</button>
+            <button class="wr-btn" data-quick="reports">查看历史</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">系统定时任务</span>
+          <span class="wr-card__hint" id="sched-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div id="schedule" class="wr-muted" style="font-size:12px;line-height:1.7">—</div>
+          <div class="wr-actions" style="margin-top:10px">
+            <button class="wr-btn" id="btn-sched-install">指向插件引擎（周日 22:00）</button>
+            <button class="wr-btn wr-btn--danger" id="btn-sched-remove">移除定时任务</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">最近一次生成</span>
+          <span class="wr-card__hint" id="lastrun-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div id="last-run" class="wr-muted" style="font-size:12px;line-height:1.7">尚未生成</div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head"><span class="wr-card__title">路径</span>
+          <span class="wr-card__hint">点击右侧可复制</span></div>
+        <div class="wr-card__body"><dl class="wr-kv" id="paths"></dl></div>
+      </div>
+    </section>
+
+    <!-- ================= 配置 ================= -->
+    <section class="wr-pane" data-pane="config">
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">研发平台接入</span>
+          <span class="wr-card__hint" id="key-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div class="wr-field">
+            <div class="wr-field__label"><b>API Key</b><span class="wr-field__hint">存本机，不回显</span></div>
+            <div class="wr-row">
+              <div class="wr-input-wrap has-suffix">
+                <input id="api-key" type="password" placeholder="粘贴 sk- 开头的 Key" spellcheck="false" autocomplete="off" />
+                <span class="wr-suffix"><button class="wr-minibtn" data-toggle="#api-key" type="button">显示</button></span>
+              </div>
+              <button class="wr-btn wr-btn--primary" id="btn-save-key">保存</button>
+              <button class="wr-btn" id="btn-test-key">测试</button>
+            </div>
+            <p class="wr-field__tip">研发平台 → 个人设置 → API Key</p>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>MCP 地址</b></div>
+            <input id="mcp-url" type="text" spellcheck="false" placeholder="https://mcp.example.com/api/mcp" />
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head"><span class="wr-card__title">生成参数</span></div>
+        <div class="wr-card__body">
+          <div class="wr-field">
+            <div class="wr-field__label"><b>处理人</b><span class="wr-field__hint">只用于归属判断，不是过滤条件</span></div>
+            <input id="handler" type="text" spellcheck="false" placeholder="张三" />
+            <p class="wr-field__tip">
+              周报<b>不只收</b>「处理人是我」的工单——本周期内<b>有我的工时记录</b>的工单也会计入（处理人是谁都算）。
+              这里填的名字用于：① 本周期新建工单是否算我的；② 跨周收尾（本周完成但没记工时）是否算我的；③ 日志里的「我处理」标记。
+            </p>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>相似度阈值</b><span class="wr-field__hint" id="threshold-hint">0.85</span></div>
+            <div class="wr-threshold">
+              <input id="threshold-range" type="range" min="0.5" max="1" step="0.01" value="0.85" />
+              <input id="threshold" type="number" min="0" max="1" step="0.01" />
+            </div>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>周报输出目录</b><span class="wr-field__hint">留空 = 插件内 data/reports</span></div>
+            <div class="wr-row">
+              <input id="out-dir" type="text" spellcheck="false" placeholder="点「浏览…」选择文件夹，或直接粘贴路径" />
+              <button class="wr-btn" data-browse="#out-dir" type="button">浏览…</button>
+            </div>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>绩效表目录</b><span class="wr-field__hint">只影响绩效 xlsx</span></div>
+            <div class="wr-row">
+              <input id="folder" type="text" spellcheck="false" placeholder="点「浏览…」选择文件夹" />
+              <button class="wr-btn" data-browse="#folder" type="button">浏览…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">邮件通知</span>
+          <span class="wr-card__hint" id="pass-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <label class="wr-switch" style="margin-bottom:12px">
+            <input id="notify-enabled" type="checkbox" />
+            <span class="wr-switch__track"></span>
+            <span>生成后自动发送周报邮件</span>
+          </label>
+          <div class="wr-grid2">
+            <div class="wr-field">
+              <div class="wr-field__label"><b>SMTP 服务器</b></div>
+              <input id="smtp-host" type="text" spellcheck="false" placeholder="smtp.163.com" />
+            </div>
+            <div class="wr-field">
+              <div class="wr-field__label"><b>端口</b></div>
+              <input id="smtp-port" type="number" placeholder="465" />
+            </div>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>发件邮箱</b></div>
+            <input id="smtp-user" type="text" spellcheck="false" placeholder="you@163.com" />
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>客户端授权码</b><span class="wr-field__hint">留空 = 不修改</span></div>
+            <div class="wr-input-wrap has-suffix">
+              <input id="smtp-pass" type="password" placeholder="16 位授权码，不是登录密码" spellcheck="false" autocomplete="off" />
+              <span class="wr-suffix"><button class="wr-minibtn" data-toggle="#smtp-pass" type="button">显示</button></span>
+            </div>
+            <p class="wr-field__tip">163/QQ 邮箱需先在设置里开启 SMTP/IMAP，再获取授权码</p>
+          </div>
+          <div class="wr-field">
+            <div class="wr-field__label"><b>收件人</b><span class="wr-field__hint">逗号分隔，留空 = 发给自己</span></div>
+            <input id="smtp-to" type="text" spellcheck="false" placeholder="a@163.com, b@qq.com" />
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-sticky">
+        <button class="wr-btn wr-btn--primary" id="btn-save-config">保存配置</button>
+        <button class="wr-btn" id="btn-test-mail">试运行（不发信）</button>
+        <span class="wr-dirty" id="dirty" hidden>有未保存修改</span>
+      </div>
+      <pre class="wr-pre" id="test-out" hidden style="margin-top:10px"></pre>
+    </section>
+
+    <!-- ================= 生成 ================= -->
+    <section class="wr-pane" data-pane="run">
+      <div class="wr-card">
+        <div class="wr-card__head"><span class="wr-card__title">周期</span></div>
+        <div class="wr-card__body">
+          <div class="wr-seg" id="period-seg">
+            <button data-period="current" class="is-active">本周</button>
+            <button data-period="last">上周</button>
+            <button data-period="range">自定义</button>
+          </div>
+          <div id="range-wrap" class="wr-grid2" hidden style="margin-top:12px">
+            <div class="wr-field" style="margin:0">
+              <div class="wr-field__label"><b>开始</b></div>
+              <input id="start" type="date" />
+            </div>
+            <div class="wr-field" style="margin:0">
+              <div class="wr-field__label"><b>结束</b></div>
+              <input id="end" type="date" />
+            </div>
+          </div>
+          <input id="period" type="hidden" value="current" />
+        </div>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-card__head"><span class="wr-card__title">选项</span></div>
+        <div class="wr-card__body">
+          <div class="wr-options">
+            <label class="wr-option">
+              <input id="opt-perf" type="checkbox" checked />
+              <span class="wr-option__text">
+                <span class="wr-option__title">同时生成绩效文档</span>
+                <span class="wr-option__desc">写入本月月度考核表 xlsx</span>
+              </span>
+            </label>
+            <label class="wr-option">
+              <input id="opt-dry" type="checkbox" />
+              <span class="wr-option__text">
+                <span class="wr-option__title">只试运行，不发邮件</span>
+                <span class="wr-option__desc">只打印通知正文，不实际发送</span>
+              </span>
+            </label>
+            <label class="wr-option">
+              <input id="opt-notasks" type="checkbox" />
+              <span class="wr-option__text">
+                <span class="wr-option__title">不读任务中心</span>
+                <span class="wr-option__desc">只按工单生成（--no-tasks）</span>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-actions" style="margin:14px 0">
+        <button class="wr-btn wr-btn--primary wr-btn--lg" id="btn-run">开始生成</button>
+        <button class="wr-btn" id="btn-cancel" disabled>终止</button>
+        <span class="wr-field__hint" id="run-hint"></span>
+      </div>
+
+      <div class="wr-card">
+        <div class="wr-logbar">
+          <span class="wr-logbar__dot" id="log-dot"></span>
+          <span class="wr-logbar__text" id="log-state">等待生成</span>
+          <span class="wr-logbar__spacer"></span>
+          <button class="wr-minibtn" id="btn-clear-log">清空</button>
+        </div>
+        <pre class="wr-pre" id="run-log" style="border:0;border-radius:0;max-height:44vh">（还没有日志）</pre>
+      </div>
+    </section>
+
+    <!-- ================= 历史 ================= -->
+    <section class="wr-pane" data-pane="reports">
+      <div class="wr-actions" style="margin-bottom:12px">
+        <div class="wr-input-wrap" style="flex:1 1 200px">
+          <input id="report-search" type="search" placeholder="搜索文件名…" />
+        </div>
+        <button class="wr-btn" id="btn-reload-reports">重新扫描</button>
+        <span class="wr-field__hint" id="report-hint"></span>
+      </div>
+      <div class="wr-list" id="report-list"></div>
+      <div id="report-view-wrap" hidden style="margin-top:12px">
+        <div class="wr-card">
+          <div class="wr-card__head">
+            <span class="wr-card__title" id="report-view-title">内容</span>
+            <span class="wr-card__hint"><button class="wr-minibtn" id="btn-close-report">收起</button></span>
+          </div>
+          <pre class="wr-pre wr-pre--report" id="report-view" style="border:0;border-radius:0;max-height:56vh"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 注意事项 ================= -->
+    <section class="wr-pane" data-pane="notes">
+      <div class="wr-actions" style="margin-bottom:12px">
+        <div class="wr-seg" id="note-filter">
+          <button data-level="all" class="is-active">全部</button>
+          <button data-level="warn">注意</button>
+          <button data-level="danger">重要</button>
+        </div>
+      </div>
+      <div class="wr-list" id="notes-list"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ================= 目录选择弹窗 ================= -->
+<div class="wr-modal" id="fs-modal" hidden>
+  <div class="wr-modal__mask" data-fs-close></div>
+  <div class="wr-modal__panel" role="dialog" aria-label="选择文件夹">
+
+    <div class="wr-modal__head">
+      <span class="wr-modal__title" id="fs-title">选择文件夹</span>
+      <button class="wr-iconbtn" data-fs-close title="关闭（Esc）" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <!-- 快捷入口 -->
+    <div class="wr-picker__quick" id="fs-shortcuts"></div>
+
+    <!-- 面包屑 + 跳转 -->
+    <div class="wr-picker__nav">
+      <button class="wr-iconbtn wr-picker__up" id="fs-up" title="上一级（Backspace）" aria-label="上一级">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+      </button>
+      <nav class="wr-crumbs" id="fs-crumbs" aria-label="路径"></nav>
+      <button class="wr-iconbtn" id="fs-edit-path" title="手动输入路径" aria-label="输入路径">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M14 6l4 4"/></svg>
+      </button>
+    </div>
+
+    <div class="wr-picker__pathrow" id="fs-pathrow" hidden>
+      <input id="fs-path" type="text" spellcheck="false" placeholder="粘贴路径后回车" />
+      <button class="wr-btn" id="fs-go">前往</button>
+    </div>
+
+    <div class="wr-picker__drivebar" id="fs-drives"></div>
+
+    <!-- 目录列表 -->
+    <div class="wr-fs-list" id="fs-list"></div>
+
+    <!-- 选中结果 + 新建 + 操作 -->
+    <div class="wr-picker__pickbar">
+      <span class="wr-picker__picklabel">将选择</span>
+      <span class="wr-picker__pickpath" id="fs-picked">—</span>
+    </div>
+
+    <div class="wr-picker__newrow">
+      <input id="fs-newname" type="text" placeholder="新文件夹名称" spellcheck="false" />
+      <button class="wr-btn" id="fs-mkdir">新建文件夹</button>
+    </div>
+
+    <div class="wr-modal__foot">
+      <span class="wr-picker__hint">单击选中 · 双击进入</span>
+      <span style="flex:1 1 auto"></span>
+      <button class="wr-btn" data-fs-close>取消</button>
+      <button class="wr-btn wr-btn--primary" id="fs-pick">选此文件夹</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
