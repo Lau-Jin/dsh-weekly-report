@@ -23,7 +23,8 @@ param(
     [string]$ProfileRoot = "",
     [switch]$Uninstall,
     [switch]$Status,
-    [switch]$Copy   # 不用 Junction，直接复制一份（插件目录会被移动时用；代价是改代码不即时生效）
+    [switch]$Copy,   # 不用 Junction，直接复制一份（插件目录会被移动时用；代价是改代码不即时生效）
+    [switch]$NoWatchdog  # 不装「面板服务守护」计划任务（默认装：每 2 分钟探活，挂了自动拉起）
 )
 
 $ErrorActionPreference = "Stop"
@@ -89,6 +90,14 @@ if ($Status) {
     $svc = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
            Where-Object { $_.CommandLine -match "weekly-report" }
     Write-Host ("service pid : " + (($svc | ForEach-Object { $_.ProcessId }) -join ", "))
+    $wd = Get-ScheduledTask -TaskName "周报面板守护" -ErrorAction SilentlyContinue
+    if ($wd) {
+        $wi = Get-ScheduledTaskInfo -TaskName "周报面板守护" -ErrorAction SilentlyContinue
+        $next = if ($wi -and $wi.NextRunTime) { $wi.NextRunTime.ToString('yyyy-MM-dd HH:mm') } else { '' }
+        Write-Host ("watchdog   : installed (" + $wd.State + $(if ($next) { ", next $next" } else { '' }) + ")")
+    } else {
+        Write-Host "watchdog   : NOT installed (panel service won't restart by itself when DSH is closed)" -ForegroundColor Yellow
+    }
     $dataDir = Join-Path $PluginDir "service\data"
     Write-Host ("data dir   : " + $dataDir + "  (exists: " + (Test-Path $dataDir) + ")")
     exit 0
@@ -121,6 +130,13 @@ if ($Uninstall) {
             Write-Bytes $ProfilePatch $new
             Write-Host "cordis.patch.yml updated (backup: $bak)" -ForegroundColor Green
         }
+    }
+
+    # 守护任务（v0.7.1 起默认安装）
+    $wd = Get-ScheduledTask -TaskName "周报面板守护" -ErrorAction SilentlyContinue
+    if ($wd) {
+        Unregister-ScheduledTask -TaskName "周报面板守护" -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Host "removed scheduled task: 周报面板守护" -ForegroundColor Green
     }
 
     Write-Host ""
@@ -219,6 +235,23 @@ if (Test-Path $ProfilePatch) {
     }
 } else {
     Write-Host "  WARN: $ProfilePatch not found, skipped" -ForegroundColor Yellow
+}
+
+# 4) 面板服务守护（每 2 分钟探活，挂了自动拉起；-NoWatchdog 可跳过）
+if ($NoWatchdog) {
+    Write-Host "  watchdog: skipped (-NoWatchdog)"
+} else {
+    $wdScript = Join-Path $PluginDir "service\ps\watchdog-install.ps1"
+    if (Test-Path $wdScript) {
+        try {
+            $r = & powershell -NoProfile -ExecutionPolicy Bypass -File $wdScript -TaskName "周报面板守护" 2>&1
+            Write-Host "  watchdog: installed (every 2 min -> http://127.0.0.1:8798/api/ping)"
+        } catch {
+            Write-Host "  WARN: watchdog install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  WARN: watchdog-install.ps1 not found, skipped" -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""

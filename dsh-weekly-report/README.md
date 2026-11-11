@@ -1,4 +1,4 @@
-﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.0）
+﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.1）
 
 **完全自主**：生成引擎、配置、API Key、输出目录全部在插件内，不再依赖 `D:\Reports` 里的脚本和配置。
 装进 DSH 后在**侧边栏**用，也能单独用浏览器打开。
@@ -156,6 +156,7 @@ mklink /J "D:\Tools\Lau-tool\dsh-weekly-report" "D:\Tools\Lau-tool\dsh-weekly-re
 | 健康状态 | 7 项体检，每项带 ✓ / ! 标记与说明，右上角显示「n/7 项正常」 |
 | 快捷操作 | **生成本周周报** / 只试运行 / 查看历史，一键直达 |
 | 绩效表核对 | 「核对本月绩效表（缺的自动补）」按钮 + 核对报告正文 |
+| 面板服务守护 | 守护任务状态（每 2 分钟探活）+ 一键装/卸 |
 | 系统定时任务 | 状态、下次运行、是否指向插件引擎，附带接管/移除按钮 |
 | 最近一次生成 | 成功/失败徽标 + 时间 + 产物路径 |
 | 路径 | 插件/引擎/配置/Key/输出，每条带「复制」 |
@@ -191,7 +192,7 @@ mklink /J "D:\Tools\Lau-tool\dsh-weekly-report" "D:\Tools\Lau-tool\dsh-weekly-re
 搜索框即时过滤文件名；每条显示目录、条数、大小、时间，点「查看」在下方展开正文，可收起。
 
 ### 注意事项
-13 条内置规则，可按「全部 / 注意 / 重要」筛选，左侧色条区分级别。
+15 条内置规则，可按「全部 / 注意 / 重要」筛选，左侧色条区分级别。
 
 ## 绩效表（月度考核表）：按月累积 + 月底核对
 
@@ -248,6 +249,41 @@ python "<插件>\service\engine\gen_weekly_text.py" --config "<插件>\service\d
 
 面板里也有按钮：概览 →「绩效表核对」→ **核对本月绩效表（缺的自动补）**。
 
+## 保持在线（连通性，v0.7.1）
+
+以前面板偶尔「服务没响应」、侧边栏变红，不是服务真挂了，而是**探活打错了接口**：
+宿主心跳和侧边栏都拿 `/api/state` 当健康检查，而 `/api/state` 要 spawn python 体检
+（约 1 秒）+ powershell 查计划任务（约 2~5 秒），慢的时候超过探活超时 → 判成「挂了」→
+反复拉起 → 日志里一堆 `port 8798 in use`，面板还可能卡在「服务没有响应」。
+
+现在分四层：
+
+| 层 | 做法 |
+|---|---|
+| 探活接口 | 新增 **`GET /api/ping`**：不碰磁盘、不 spawn 进程，1~2 ms 返回 `{ok,pid,version,uptimeMs,busy}` |
+| 状态接口 | `/api/state` 全部读内存缓存：python 体检缓存 10 分钟、计划任务查询缓存 5 分钟，**先回旧值、后台刷新**，第一次调用也是毫秒级 |
+| 宿主心跳 | `lib/index.js` 改 ping 探活、20 秒一次、单飞（上一次拉起没结果不重复拉），拉起后 5 秒内复核，只记「起来／没起来」两种日志 |
+| 面板/侧边栏 | 也改 ping；面板挂了时 3 秒一探，**服务回来后自动刷新 iframe**，不用手点「重试」 |
+| 系统守护 | Windows 计划任务 **`周报面板守护`**：每 2 分钟探一次 ping，不在就拉起（实测服务挂掉到恢复约 2 秒）；DSH 没开、服务被系统杀掉都能回来 |
+
+实测（本机）：`/api/ping` 0~1 ms，`/api/state` 首次 14 ms、之后 5~12 ms（改之前首次 4.9~6.4 秒）；
+20 次 `/api/state` 期间 powershell 进程数不增加；杀掉服务后由计划任务 2.1 秒拉起。
+
+守护相关：
+
+```powershell
+# 装/卸（也可以点面板概览的「面板服务守护」卡片）
+powershell -ExecutionPolicy Bypass -File "<插件>\service\ps\watchdog-install.ps1"
+powershell -ExecutionPolicy Bypass -File "<插件>\service\ps\watchdog-remove.ps1"
+
+# 手动看一眼
+Get-ScheduledTask -TaskName '周报面板守护' | Select-Object TaskName,State
+Invoke-RestMethod http://127.0.0.1:8798/api/ping
+Get-Content "$env:USERPROFILE\.dsh\weekly-report\logs\watchdog.log" -Tail 5
+```
+
+`install.ps1` 现在默认就把守护装上（`-NoWatchdog` 可跳过），卸载时一并删掉。
+
 ## 定时任务接管
 
 概览页按钮「指向插件引擎（周日 22:00）」会**覆盖**系统计划任务 `周报自动生成`，命令变成：
@@ -264,7 +300,9 @@ python.exe "<插件>\service\engine\gen_weekly_text.py" \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/state` | 体检 + 配置(脱敏) + 定时任务 + 历史 + 注意事项 + 运行状态 |
+| GET | `/api/ping` | 轻量探活（不 spawn 进程），1~2 ms 返回 pid/version/uptimeMs/busy |
+| GET | `/api/state` | 体检 + 配置(脱敏) + 定时任务 + 守护 + 历史 + 注意事项 + 运行状态（内存缓存，毫秒级） |
+| GET/POST | `/api/watchdog` | 面板服务守护：查询 / `{action:'install'|'remove'}` |
 | POST | `/api/config` | 保存配置（密码占位符回传不会覆盖真实值） |
 | POST | `/api/api-key` | 保存 API Key |
 | POST | `/api/test-key` | 用给定/已存 Key 调一次 MCP，返回工具数与耗时 |

@@ -28,7 +28,7 @@ window.__ModuleLoader__.load({
         save: '保存',
         close: '关闭',
         down: '周报面板服务没有响应',
-        downTip: '点「启动服务」或重启 DSH；服务脚本在 dsh-weekly-report/service/server.cjs。',
+        downTip: '正在自动重连（服务恢复后会自动刷新）；装了「面板服务守护」的话最多 2 分钟会被自动拉起。',
         retry: '重试',
         start: '启动服务',
       },
@@ -62,6 +62,8 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------- health
+    // 探活用轻量 /api/ping（1~2 ms）；/api/state 要 spawn python 体检，慢的时候好几秒，
+    // 拿它当健康检查会误判成「服务挂了」。状态点仍然是「ping 通 + 体检无 error」。
     const health = { state: 'unknown', listeners: new Set() }
     const setHealth = (next) => {
       if (health.state === next) return
@@ -74,17 +76,33 @@ window.__ModuleLoader__.load({
       return () => { health.listeners.delete(listener) }
     }
 
-    async function probe() {
+    async function ping() {
       try {
-        const res = await fetch(readUrl() + 'api/state', { cache: 'no-store', signal: AbortSignal.timeout(3000) })
-        if (!res.ok) { setHealth('down'); return }
-        const data = await res.json().catch(() => null)
-        const bad = data && Array.isArray(data.checks)
+        const res = await fetch(readUrl() + 'api/ping', { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+        return res.ok
+      } catch {
+        return false
+      }
+    }
+
+    let badCheckedAt = 0
+    let badCount = 0
+
+    async function probe() {
+      if (!(await ping())) { setHealth('down'); return }
+      // 活着；顺手（最多 30 秒一次）看体检里有没有 error，决定绿点还是黄点
+      if (Date.now() - badCheckedAt < 30000) { setHealth(badCount ? 'warn' : 'ok'); return }
+      badCheckedAt = Date.now()
+      try {
+        const res = await fetch(readUrl() + 'api/state', { cache: 'no-store', signal: AbortSignal.timeout(8000) })
+        const data = res.ok ? await res.json().catch(() => null) : null
+        badCount = data && Array.isArray(data.checks)
           ? data.checks.filter((c) => c.level === 'error').length
           : 0
-        setHealth(bad ? 'warn' : 'ok')
+        setHealth(badCount ? 'warn' : 'ok')
       } catch {
-        setHealth('down')
+        // 体检没拿到不代表服务挂了（ping 已经通过）
+        setHealth('ok')
       }
     }
 
@@ -92,7 +110,7 @@ window.__ModuleLoader__.load({
     function startProbe() {
       if (probeTimer) return
       void probe()
-      probeTimer = window.setInterval(probe, 25000)
+      probeTimer = window.setInterval(probe, 20000)
     }
 
     function useHealth() {
@@ -172,18 +190,30 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         let alive = true
-        const check = async () => {
+        let timer = 0
+        let wasDown = false
+
+        const tick = async () => {
+          let ok = false
           try {
-            const res = await fetch(url + 'api/state', { cache: 'no-store' })
-            if (alive) setDown(!res.ok)
-          } catch {
-            if (alive) setDown(true)
+            const res = await fetch(url + 'api/ping', { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+            ok = res.ok
+          } catch { ok = false }
+          if (!alive) return
+          setDown(!ok)
+          if (ok && wasDown) {
+            wasDown = false
+            setGen((n) => n + 1)          // 服务回来了 → 自动把 iframe 刷成正常页面
+          } else if (!ok) {
+            wasDown = true
           }
+          // 活着 20 秒探一次；挂了 3 秒探一次，恢复得快
+          timer = window.setTimeout(tick, ok ? 20000 : 3000)
         }
-        check()
-        timer.current = window.setInterval(check, 20000)
-        return () => { alive = false; if (timer.current) window.clearInterval(timer.current) }
-      }, [url, gen])
+
+        void tick()
+        return () => { alive = false; if (timer) window.clearTimeout(timer) }
+      }, [url])
 
       const applyUrl = useCallback((next) => {
         const target = normalizeUrl(next)

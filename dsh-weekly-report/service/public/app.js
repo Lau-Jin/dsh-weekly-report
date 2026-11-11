@@ -104,7 +104,12 @@ function renderPaths(paths) {
 function renderSchedule(s) {
   const box = $('#schedule');
   const hint = $('#sched-hint');
-  if (!s || !s.installed) {
+  if (!s || s.pending) {
+    box.innerHTML = '<span class="wr-muted">查询中…（后台在问 Windows 计划任务）</span>';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  if (!s.installed) {
     box.innerHTML = '<span class="wr-muted">未注册（不注册也能在面板里手动生成）</span>';
     hint.textContent = '';
     return;
@@ -118,6 +123,29 @@ function renderSchedule(s) {
   box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>
     <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(s.target || '—')}</div>`;
   hint.textContent = '';
+}
+
+function renderWatchdog(wd) {
+  const box = $('#watchdog');
+  const hint = $('#wd-hint');
+  if (!box) return;
+  if (!wd || wd.pending) {
+    box.innerHTML = '<span class="wr-muted">查询中…</span>';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  if (!wd.installed) {
+    box.innerHTML = '<span class="wr-muted">未装守护（服务挂了只能靠 DSH 宿主 20 秒心跳拉起）</span>';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  const chips = [];
+  if (wd.state) chips.push(`<span class="wr-chip">${esc(wd.state)}</span>`);
+  if (wd.next) chips.push(`<span class="wr-chip">下次 ${esc(wd.next)}</span>`);
+  chips.push('<span class="wr-chip wr-chip--ok">每 2 分钟探活</span>');
+  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>
+    <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(wd.target || '—')}</div>`;
+  if (hint) hint.textContent = '';
 }
 
 function renderLastRun(run) {
@@ -286,6 +314,7 @@ function applyState(data) {
   renderChecks(data.checks || []);
   renderPaths(data.paths || {});
   renderSchedule(data.schedule);
+  renderWatchdog(data.watchdog);
   renderLastRun(data.run);
   renderNotes(data.notes || []);
   renderReports(data.reports || []);
@@ -533,6 +562,25 @@ function bindActions() {
     const pre = $('#run-log');
     pre.textContent = '（已清空，这里只清显示）';
     pre.dataset.cleared = '1';
+  };
+
+  $('#btn-wd-install').onclick = async () => {
+    const btn = $('#btn-wd-install');
+    btn.disabled = true;
+    try {
+      const r = await post('/api/watchdog', { action: 'install' });
+      toast(r.ok ? '守护已装好：每 2 分钟探活' : '装守护失败', r.ok ? 'ok' : 'err');
+      await refresh(true);
+    } catch (e) { toast('失败：' + e.message, 'err'); } finally { btn.disabled = false; }
+  };
+
+  $('#btn-wd-remove').onclick = async () => {
+    if (!confirm('移除面板服务守护？之后服务挂了只能靠 DSH 宿主心跳拉起。')) return;
+    try {
+      const r = await post('/api/watchdog', { action: 'remove' });
+      toast(r.ok ? '守护已移除' : '移除失败', r.ok ? 'ok' : 'err');
+      await refresh(true);
+    } catch (e) { toast('失败：' + e.message, 'err'); }
   };
 
   $('#btn-sched-install').onclick = async () => {

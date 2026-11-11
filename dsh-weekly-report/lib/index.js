@@ -1,17 +1,25 @@
 /**
  * 周报面板 · Host 半身
  *
- * 只做一件事：保证本地面板服务（127.0.0.1:8798）在运行。
+ * 只做一件事：保证本地面板服务（默认 127.0.0.1:8798）在运行。
  * 面板本身是纯 UI，所有读写（配置 / API Key / 生成 / 历史）都由那个服务完成，
  * 这里不碰任何凭据。
+ *
+ * 2026-11-11（v0.7.1）连通性优化：
+ *   · 探活用轻量 /api/ping（1~2 ms），不再打 /api/state（要 spawn python，慢的时候 2~6 s，
+ *     会把活着服务误判成挂了，然后反复拉起 → 日志里一堆「port in use」）
+ *   · 心跳 20 秒一次，单飞（上一次拉起还没结果就不重复拉起）
+ *   · 拉起后 5 秒内复核一次，只记「起来 / 没起来」两种日志，不再刷屏
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const VERSION = '0.1.0'
-const SERVICE = 'http://127.0.0.1:8798'
+const VERSION = '0.7.1'
+const PORT = process.env.WEEKLY_PANEL_PORT || '8798'
+const SERVICE = `http://127.0.0.1:${PORT}`
+const PING = SERVICE + '/api/ping'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 /**
@@ -37,7 +45,7 @@ function findServer() {
 
 async function reachable() {
   try {
-    const res = await fetch(SERVICE + '/api/state', { signal: AbortSignal.timeout(1500) })
+    const res = await fetch(PING, { signal: AbortSignal.timeout(1200), cache: 'no-store' })
     return res.ok
   } catch {
     return false
@@ -57,13 +65,23 @@ function nodeBinary() {
   return { command: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
 }
 
+let lastSpawnAt = 0
+let lastState = ''
+
 async function ensureService() {
-  if (await reachable()) return
+  if (await reachable()) {
+    if (lastState !== 'up') { lastState = 'up'; console.log('[weekly-report] 面板服务在线：' + SERVICE) }
+    return
+  }
+  if (lastState === 'down') console.warn('[weekly-report] 面板服务仍然不在：' + SERVICE)
+  lastState = 'down'
+  if (Date.now() - lastSpawnAt < 8000) return
   const server = findServer()
   if (!server) {
     console.warn('[weekly-report] server.cjs not found, tried:\n  ' + SERVER_CANDIDATES.join('\n  '))
     return
   }
+  lastSpawnAt = Date.now()
   try {
     const { command, env } = nodeBinary()
     const child = spawn(command, [server], {
@@ -74,7 +92,16 @@ async function ensureService() {
       windowsHide: true,
     })
     child.unref()
-    console.log('[weekly-report] 面板服务已启动：' + server)
+    // 拉起后复核一次：起来就报一句，没起来给个明确提示（不再每 60 秒刷一次）
+    for (let i = 0; i < 10; i += 1) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (await reachable()) {
+        lastState = 'up'
+        console.log('[weekly-report] 面板服务已启动：' + server)
+        return
+      }
+    }
+    console.warn('[weekly-report] 已尝试启动面板服务，但 5 秒内没响应：' + server)
   } catch (error) {
     console.warn('[weekly-report] 启动面板服务失败：', error && error.message)
   }
@@ -85,9 +112,9 @@ export function apply(ctx) {
   if (ctx && typeof ctx.effect === 'function') {
     try {
       ctx.effect(() => {
-        // 服务挂了要能自己回来（DSH 重启后尤其重要）
+        // 20 秒一次探活：ping 很轻，不会给服务添负担；挂了最多 20 秒就回来
         const revive = () => { void ensureService().catch(() => {}) }
-        const timer = setInterval(revive, 60_000)
+        const timer = setInterval(revive, 20_000)
         if (typeof timer.unref === 'function') timer.unref()
         return () => clearInterval(timer)
       }, 'weekly-report: heartbeat')

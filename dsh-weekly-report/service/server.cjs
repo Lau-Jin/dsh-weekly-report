@@ -33,6 +33,7 @@ function pluginVersion() {
   }
 }
 const VERSION = pluginVersion();
+const STARTED_AT = Date.now();
 
 const HOST = process.env.WEEKLY_PANEL_HOST || '127.0.0.1';
 const PORT = Number(process.env.WEEKLY_PANEL_PORT || 8798);
@@ -159,17 +160,6 @@ async function checkPythonDeps(py) {
   };
 }
 
-async function checkScheduledTask() {
-  const r = await exec('schtasks', ['/Query', '/TN', '周报自动生成', '/FO', 'LIST'], { timeout: 15000 });
-  if (r.code !== 0) return { installed: false, detail: '' };
-  const next = /Next Run Time:\s*(.+)/i.exec(r.out);
-  return {
-    installed: true,
-    status: (/Status:\s*(.+)/i.exec(r.out) || [])[1] || '',
-    nextRun: next ? next[1].trim() : '',
-  };
-}
-
 // ---------------------------------------------------------------- 历史
 /** 周报目录：跟着配置走（绝对路径直接 use；相对路径按引擎目录解析，跟 Python 一致） */
 function reportsDir() {
@@ -230,6 +220,8 @@ const NOTES = [
   { id: 'rate', level: 'warn', title: '接口限流', text: '研发平台 MCP 限 60 次/分钟；撞限会等 20 秒重试，生成一次通常 1~3 分钟，期间别重复点。' },
   { id: 'cancel', level: 'info', title: '已取消不写', text: '工单状态 cancelled / 任务「已取消」一律跳过。' },
   { id: 'engine', level: 'info', title: '引擎随插件走', text: '生成脚本在 service/engine/gen_weekly_text.py，配置与 Key 在 service/data/，输出在 service/data/reports/，不依赖外部目录。' },
+  { id: 'alive', level: 'info', title: '探活用 /api/ping', text: '/api/ping 不碰磁盘、不 spawn 进程，1~2 ms 就回；宿主心跳、侧边栏状态点、守护任务都用它。面板卡不卡、红不红，以它为准。' },
+  { id: 'watchdog', level: 'info', title: '面板服务守护', text: '计划任务「周报面板守护」每 2 分钟探一次 ping，服务不在就自动拉起；面板概览可一键装/卸，日志在 %USERPROFILE%\\.dsh\\weekly-report\\logs\\watchdog.log。' },
   { id: 'key', level: 'danger', title: '凭据安全', text: 'API Key 与邮箱授权码只存本机 service/data/，不要提交到代码库或随包外发。' },
 ];
 
@@ -240,8 +232,11 @@ function buildChecks(cfg, deps, task, key) {
     detail: key ? maskKey(key) : '未配置，请在「配置」页粘贴后保存',
   });
   checks.push({
-    id: 'python', level: deps.ok ? 'ok' : 'error', label: 'Python 环境',
-    detail: deps.ok ? `${deps.version}（openpyxl 可用）` : (deps.detail || '不可用'),
+    id: 'python',
+    level: deps.pending ? 'info' : (deps.ok ? 'ok' : 'error'),
+    label: 'Python 环境',
+    detail: deps.pending ? '检测中…'
+      : (deps.ok ? `${deps.version}（openpyxl 可用）` : (deps.detail || '不可用')),
   });
   checks.push({
     id: 'engine', level: fs.existsSync(P.ENGINE) ? 'ok' : 'error', label: '内置引擎',
@@ -255,8 +250,11 @@ function buildChecks(cfg, deps, task, key) {
       : (smtp.password && smtp.user ? `${smtp.user}（${smtp.host || 'smtp'}）` : '已启用但账号或授权码为空'),
   });
   checks.push({
-    id: 'task', level: task.installed ? 'ok' : 'info', label: '系统定时任务',
-    detail: task.installed ? `已注册${task.nextRun ? '，下次 ' + task.nextRun : ''}` : '未注册（可选，面板可手动生成）',
+    id: 'task',
+    level: task.pending ? 'info' : (task.installed ? 'ok' : 'info'),
+    label: '系统定时任务',
+    detail: task.pending ? '查询中…'
+      : (task.installed ? `已注册${task.nextRun ? '，下次 ' + task.nextRun : ''}` : '未注册（可选，面板可手动生成）'),
   });
   checks.push({
     id: 'perf', level: (cfg.folder && fs.existsSync(cfg.folder)) ? 'ok' : 'info', label: '绩效表目录',
@@ -363,19 +361,36 @@ function parseLastJson(out) {
   try { return JSON.parse(line || '{}'); } catch (_) { return {}; }
 }
 
-async function readSchedule() {
-  const r = await runPs('task-info.ps1', ['-TaskName', TASK_NAME]);
+async function readTasks() {
+  const r = await runPs('tasks-info.ps1', ['-ScheduleTask', TASK_NAME, '-WatchdogTask', WATCHDOG_TASK]);
   const d = parseLastJson(r.out);
-  if (!d.installed) return { installed: false, target: '', nextRun: '', status: '', pointsToPlugin: false };
-  const target = [d.execute, d.arguments].filter(Boolean).join(' ').trim();
-  return {
-    installed: true,
-    status: d.state || '',
+  const s = d.schedule || {};
+  const w = d.watchdog || {};
+  const target = String(s.target || '').trim();
+  const schedule = {
+    installed: !!s.installed,
+    status: s.state || '',
     target,
-    nextRun: d.next || '',
-    lastResult: d.lastResult,
+    nextRun: s.next || '',
+    lastResult: s.lastResult,
     pointsToPlugin: /dsh-weekly-report/i.test(target) && /gen_weekly_text\.py/i.test(target),
   };
+  const watchdog = {
+    taskName: WATCHDOG_TASK,
+    installed: !!w.installed,
+    state: w.state || '',
+    next: w.next || '',
+    target: String(w.target || '').trim(),
+    lastResult: w.lastResult,
+  };
+  return { schedule, watchdog };
+}
+
+async function readSchedule(force = false) {
+  if (!force && tasksCache.data) return tasksCache.data.schedule;
+  const data = await readTasks();
+  tasksCache = { at: Date.now(), data, refreshing: false };
+  return data.schedule;
 }
 
 async function installSchedule(body) {
@@ -390,6 +405,8 @@ async function installSchedule(body) {
   ]);
   const d = parseLastJson(r.out);
   log(`schedule install code=${r.code} ok=${!!d.ok}`);
+  tasksCache = { at: 0, data: null, refreshing: false };
+  refreshTasks();
   return { ok: !!d.ok, code: r.code, next: d.next || '', action: d.action || '', out: r.out.trim().slice(-600) };
 }
 
@@ -397,7 +414,46 @@ async function removeSchedule() {
   const r = await runPs('task-remove.ps1', ['-TaskName', TASK_NAME]);
   const d = parseLastJson(r.out);
   log(`schedule remove ok=${!!d.ok}`);
+  tasksCache = { at: 0, data: null, refreshing: false };
+  refreshTasks();
   return { ok: !!d.ok, reason: d.reason || '', out: r.out.trim().slice(-300) };
+}
+
+// ---------------------------------------------------------------- 面板服务守护
+// 用 Windows 计划任务每 2 分钟探一次 /api/ping，不通就把服务拉起来。
+// 这样即使 DSH 没开、宿主插件没加载、服务被系统杀掉，面板也能自己回来。
+const WATCHDOG_TASK = '周报面板守护';
+
+async function readWatchdog() {
+  if (tasksCache.data) return tasksCache.data.watchdog;
+  const data = await readTasks();
+  tasksCache = { at: Date.now(), data, refreshing: false };
+  return data.watchdog;
+}
+
+async function installWatchdog() {
+  const r = await runPs('watchdog-install.ps1', [
+    '-TaskName', WATCHDOG_TASK,
+    '-Port', String(PORT),
+    '-Server', path.join(__dirname, 'server.cjs'),
+  ]);
+  const d = parseLastJson(r.out);
+  log(`watchdog install code=${r.code} ok=${!!d.ok}`);
+  tasksCache = { at: 0, data: null, refreshing: false };
+  refreshTasks();
+  return {
+    ok: !!d.ok, taskName: WATCHDOG_TASK, next: d.next || '',
+    out: (r.out || '').trim().slice(-600),
+  };
+}
+
+async function removeWatchdog() {
+  const r = await runPs('watchdog-remove.ps1', ['-TaskName', WATCHDOG_TASK]);
+  const d = parseLastJson(r.out);
+  log(`watchdog remove code=${r.code} ok=${!!d.ok}`);
+  tasksCache = { at: 0, data: null, refreshing: false };
+  refreshTasks();
+  return { ok: !!d.ok, reason: d.reason || '', out: (r.out || '').trim().slice(-300) };
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -435,19 +491,66 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-let stateCache = { at: 0, data: null };
+let stateCache = { at: 0, data: null, refreshing: false };
+const STATE_TTL = 60000;
 
-async function buildState(force) {
-  if (!force && stateCache.data && Date.now() - stateCache.at < 15000) return stateCache.data;
+// python 体检（spawn python ~1s）与计划任务查询（spawn powershell ~2~5s）都很贵，
+// 单独缓存、后台刷新：/api/state 永远只读内存，第一次调用也不再等它们。
+const DEPS_TTL = 10 * 60 * 1000;
+const TASKS_TTL = 5 * 60 * 1000;
+
+let depsCache = { at: 0, data: null, refreshing: false };
+let tasksCache = { at: 0, data: null, refreshing: false };
+
+function refreshDeps() {
+  if (depsCache.refreshing) return;
+  depsCache.refreshing = true;
+  checkPythonDeps(findPython())
+    .then((data) => { depsCache = { at: Date.now(), data, refreshing: false }; stateCache.at = 0; })
+    .catch((e) => { depsCache.refreshing = false; log('deps refresh failed: ' + ((e && e.message) || e)); });
+}
+
+function refreshTasks() {
+  if (tasksCache.refreshing) return;
+  tasksCache.refreshing = true;
+  readTasks()
+    .then((data) => { tasksCache = { at: Date.now(), data, refreshing: false }; stateCache.at = 0; })
+    .catch((e) => { tasksCache.refreshing = false; log('tasks refresh failed: ' + ((e && e.message) || e)); });
+}
+
+function getDeps() {
+  if (!depsCache.data) { refreshDeps(); return { pending: true, ok: false, version: '', detail: '' }; }
+  if (Date.now() - depsCache.at > DEPS_TTL) refreshDeps();
+  return depsCache.data;
+}
+
+function getTasks() {
+  if (!tasksCache.data) {
+    refreshTasks();
+    return {
+      pending: true,
+      schedule: { pending: true, installed: false, status: '', target: '', nextRun: '', pointsToPlugin: false },
+      watchdog: { pending: true, installed: false, state: '', next: '', target: '' },
+    };
+  }
+  if (Date.now() - tasksCache.at > TASKS_TTL) refreshTasks();
+  return tasksCache.data;
+}
+
+async function collectState() {
   const { config, migratedFrom } = P.loadConfig();
   const py = findPython();
-  const [deps, task] = await Promise.all([checkPythonDeps(py), checkScheduledTask()]);
+  const deps = getDeps();
+  const tasks = getTasks();
   const key = P.readKey();
-  const schedule = await readSchedule();
-  const data = {
+  const schedule = tasks.schedule;
+  const watchdog = tasks.watchdog;
+  return {
     ok: true,
     version: VERSION,
     autonomous: true,
+    pid: process.pid,
+    uptimeMs: Date.now() - STARTED_AT,
     migratedFrom: migratedFrom || '',
     paths: {
       plugin: P.PLUGIN_DIR,
@@ -461,13 +564,38 @@ async function buildState(force) {
     key: { present: !!key, masked: maskKey(key) },
     python: { path: py, ok: deps.ok, version: deps.version },
     schedule,
+    watchdog,
     checks: buildChecks(config, deps, schedule, key),
     notes: NOTES,
     reports: listReports(),
     run: publicRun(),
     serverTime: new Date().toISOString(),
   };
-  stateCache = { at: Date.now(), data };
+}
+
+function scheduleRefresh() {
+  if (stateCache.refreshing) return;
+  stateCache.refreshing = true;
+  collectState()
+    .then((data) => { stateCache = { at: Date.now(), data, refreshing: false }; })
+    .catch((e) => {
+      stateCache.refreshing = false;
+      log('state refresh failed: ' + ((e && e.message) || e));
+    });
+}
+
+function invalidateState() {
+  stateCache.at = 0;
+  scheduleRefresh();
+}
+
+async function buildState(force) {
+  if (!force && stateCache.data) {
+    if (Date.now() - stateCache.at > STATE_TTL) scheduleRefresh();
+    return stateCache.data;
+  }
+  const data = await collectState();
+  stateCache = { at: Date.now(), data, refreshing: false };
   return data;
 }
 
@@ -501,15 +629,41 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    // 轻量探活：不碰磁盘、不 spawn 进程，1~2 ms 返回，给宿主心跳 / 侧边栏状态 / 守护任务用
+    if ((req.method === 'GET' || req.method === 'HEAD') && (p === '/api/ping' || p === '/api/health')) {
+      json(res, 200, {
+        ok: true,
+        pid: process.pid,
+        version: VERSION,
+        startedAt: new Date(STARTED_AT).toISOString(),
+        uptimeMs: Date.now() - STARTED_AT,
+        busy: !!run.running,
+      });
+      return;
+    }
+
     if (req.method === 'GET' && (p === '/api/state' || p === '/api/status')) {
       json(res, 200, await buildState(url.searchParams.get('force') === '1'));
+      return;
+    }
+
+    if (req.method === 'GET' && p === '/api/watchdog') {
+      json(res, 200, { ok: true, watchdog: await readWatchdog() });
+      return;
+    }
+
+    if (req.method === 'POST' && p === '/api/watchdog') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const r = body.action === 'remove' ? await removeWatchdog() : await installWatchdog();
+      invalidateState();
+      json(res, r.ok ? 200 : 500, r);
       return;
     }
 
     if (req.method === 'POST' && p === '/api/config') {
       const body = JSON.parse(await readBody(req) || '{}');
       const merged = await saveConfig(body);
-      stateCache.at = 0;
+      invalidateState();
       log('config saved');
       json(res, 200, { ok: true, config: maskConfig(merged) });
       return;
@@ -520,7 +674,7 @@ const server = http.createServer(async (req, res) => {
       const key = String(body.key || '').trim();
       if (!key) { json(res, 400, { ok: false, error: 'key 不能为空' }); return; }
       P.writeKey(key);
-      stateCache.at = 0;
+      invalidateState();
       log('api key updated, len=' + key.length);
       json(res, 200, { ok: true, masked: maskKey(key) });
       return;
@@ -577,7 +731,7 @@ const server = http.createServer(async (req, res) => {
       const py = findPython();
       const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--week', 'current',
         '--notify-dry-run', '--no-miss-file'], { timeout: 180000 });
-      stateCache.at = 0;
+      invalidateState();
       json(res, 200, { ok: r.code === 0, code: r.code, out: r.out.slice(-4000) });
       return;
     }
@@ -589,7 +743,7 @@ const server = http.createServer(async (req, res) => {
       const args = [P.ENGINE, '--config', P.CONFIG, '--perf-check', '--perf-fix'];
       if (body.month) args.push('--perf-month', String(body.month));
       const r = await exec(py, args, { timeout: 180000, cwd: P.ENGINE_DIR });
-      stateCache.at = 0;
+      invalidateState();
       log(`perf-check code=${r.code}`);
       json(res, 200, { ok: r.code === 0, code: r.code, out: (r.out || '').slice(-8000) });
       return;
@@ -598,7 +752,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/run') {
       const body = JSON.parse(await readBody(req) || '{}');
       const r = startRun(body);
-      stateCache.at = 0;
+      invalidateState();
       json(res, r.ok ? 200 : 409, r);
       return;
     }
@@ -707,7 +861,7 @@ const server = http.createServer(async (req, res) => {
       const r = body.action === 'remove'
         ? await removeSchedule()
         : await installSchedule(body);
-      stateCache.at = 0;
+      invalidateState();
       json(res, r.ok ? 200 : 500, r);
       return;
     }
@@ -744,7 +898,28 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
+// 单个坏请求 / 坏连接不要带走整个服务
+server.on('clientError', (err, socket) => {
+  try { socket.destroy(); } catch (_) { /* ignore */ }
+});
+
+// 服务常驻：未捕获异常只记日志，不退出（真挂了交给守护任务拉起）
+process.on('uncaughtException', (e) => {
+  log('uncaughtException ' + ((e && e.stack) || e));
+});
+process.on('unhandledRejection', (e) => {
+  log('unhandledRejection ' + ((e && e.stack) || e));
+});
+
+// 浏览器复用连接时别被过早掐断（默认 keepAliveTimeout 只有 5 秒，轮询容易撞上）
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 70000;
+
 server.listen(PORT, HOST, () => {
   log(`weekly panel (autonomous) on http://${HOST}:${PORT} · data=${P.DATA_DIR}`);
   console.log(`周报面板服务（自主版）：http://${HOST}:${PORT}`);
+  // 预热缓存：/api/state 第一次调用也不等 python 体检 / powershell 查任务
+  refreshDeps();
+  refreshTasks();
+  scheduleRefresh();
 });
