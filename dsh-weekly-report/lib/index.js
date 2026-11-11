@@ -16,7 +16,6 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const VERSION = '0.7.1'
 const PORT = process.env.WEEKLY_PANEL_PORT || '8798'
 const SERVICE = `http://127.0.0.1:${PORT}`
 const PING = SERVICE + '/api/ping'
