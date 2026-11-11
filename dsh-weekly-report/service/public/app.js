@@ -58,24 +58,39 @@ const fmtTime = (iso) => {
 const fmtSize = (n) => (n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B');
 
 /* ---------------------------------------------------------------- 路径显示开关 */
-// 路径里带用户名、目录结构，默认藏起来；需要时点「显示路径」再看（记得住选择）。
-let showPaths = false;
-try { showPaths = window.localStorage.getItem('wr-show-paths') === '1'; } catch (e) { /* 无 localStorage */ }
+// 每张卡片各自一个开关（路径卡 / 定时任务 / 面板服务守护 / 最近一次生成 / 历史），
+// 默认全藏；各自独立、各自记得住，互不影响。
+const PATH_KEYS = ['paths', 'schedule', 'watchdog', 'lastrun', 'reports'];
+const pathShown = { paths: false, schedule: false, watchdog: false, lastrun: false, reports: false };
+try {
+  const saved = JSON.parse(window.localStorage.getItem('wr-show-paths') || '{}');
+  if (saved && typeof saved === 'object') {
+    PATH_KEYS.forEach((k) => { pathShown[k] = saved[k] === true; });
+  }
+} catch (e) { /* 无 localStorage / 旧格式 */ }
 
 const PATH_HIDDEN = '<span class="wr-muted">•••• 已隐藏</span>';
 
-function pathText(value) {
+function pathText(value, key) {
   if (!value) return '—';
-  return showPaths ? esc(value) : PATH_HIDDEN;
+  return pathShown[key] ? esc(value) : PATH_HIDDEN;
 }
 
-function pathBlock(value) {
+function pathBlock(value, key) {
   if (!value) return '—';
-  return `<div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${pathText(value)}</div>`;
+  return `<div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${pathText(value, key)}</div>`;
+}
+
+function savePathMode() {
+  try { window.localStorage.setItem('wr-show-paths', JSON.stringify(pathShown)); } catch (e) { /* ignore */ }
 }
 
 function syncPathToggles() {
-  $$('[data-path-toggle]').forEach((b) => { b.textContent = showPaths ? '隐藏路径' : '显示路径'; });
+  $$('[data-path-toggle]').forEach((b) => {
+    const key = b.dataset.pathToggle;
+    b.textContent = pathShown[key] ? '隐藏路径' : '显示路径';
+    b.title = pathShown[key] ? '收起这张卡片里的路径' : '显示这张卡片里的路径';
+  });
 }
 
 /* ---------------------------------------------------------------- 渲染：顶栏 */
@@ -115,9 +130,9 @@ function renderPaths(paths) {
     ['API Key', paths.key],
     ['输出目录', paths.outDir],
   ].filter(([, v]) => v);
-  if (!showPaths) {
+  if (!pathShown.paths) {
     $('#paths').innerHTML = `<dt>路径</dt>
-      <dd><span class="wr-muted">•••• 已隐藏（点右上角「显示路径」查看）</span></dd>`;
+      <dd><span class="wr-muted">•••• 已隐藏（点这张卡右上角的「显示路径」查看）</span></dd>`;
     return;
   }
   $('#paths').innerHTML = rows.map(([k, v]) => `
@@ -146,7 +161,7 @@ function renderSchedule(s) {
   chips.push(s.pointsToPlugin
     ? '<span class="wr-chip wr-chip--ok">已接管</span>'
     : '<span class="wr-chip wr-chip--warn">未接管</span>');
-  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(s.target);
+  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(s.target, 'schedule');
   hint.textContent = '';
 }
 
@@ -168,7 +183,7 @@ function renderWatchdog(wd) {
   if (wd.state) chips.push(`<span class="wr-chip">${esc(wd.state)}</span>`);
   if (wd.next) chips.push(`<span class="wr-chip">下次 ${esc(wd.next)}</span>`);
   chips.push('<span class="wr-chip wr-chip--ok">每 2 分钟探活</span>');
-  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(wd.target);
+  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(wd.target, 'watchdog');
   if (hint) hint.textContent = '';
 }
 
@@ -190,7 +205,7 @@ function renderLastRun(run) {
     `<span class="wr-chip">${esc(fmtTime(run.finishedAt || run.startedAt))}</span>`,
   ];
   box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` +
-    (run.outPath ? pathBlock(run.outPath) : '') +
+    (run.outPath ? pathBlock(run.outPath, 'lastrun') : '') +
     (run.error
       ? `<div style="color:var(--err);font-size:11.5px;margin-top:5px">${esc(run.error)}</div>`
       : '');
@@ -245,7 +260,7 @@ function renderReports(reports) {
       <div class="wr-rep">
         <div style="min-width:0;flex:1 1 auto">
           <div class="wr-rep__name">${esc(r.name)}</div>
-          <div class="wr-rep__sub">${showPaths ? esc(r.dir) : '路径已隐藏'} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
+          <div class="wr-rep__sub">${pathShown.reports ? esc(r.dir) : '路径已隐藏'} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
         </div>
         <button class="wr-btn" data-view="${esc(r.path)}">查看</button>
       </div>
@@ -614,19 +629,20 @@ function bindActions() {
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   };
 
-  // 路径显示开关（概览 + 历史两处按钮联动）
+  // 路径开关：每张卡各管各的，只刷新自己那一块
   $$('[data-path-toggle]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      showPaths = !showPaths;
-      try { localStorage.setItem('wr-show-paths', showPaths ? '1' : '0'); } catch (e) { /* ignore */ }
+      const key = btn.dataset.pathToggle;
+      pathShown[key] = !pathShown[key];
+      savePathMode();
       syncPathToggles();
       const d = state.data;
       if (!d) return;
-      renderPaths(d.paths || {});
-      renderSchedule(d.schedule);
-      renderWatchdog(d.watchdog);
-      renderLastRun(d.run);
-      renderReports(d.reports || []);
+      if (key === 'paths') renderPaths(d.paths || {});
+      else if (key === 'schedule') renderSchedule(d.schedule);
+      else if (key === 'watchdog') renderWatchdog(d.watchdog);
+      else if (key === 'lastrun') renderLastRun(d.run);
+      else if (key === 'reports') renderReports(d.reports || []);
     });
   });
   syncPathToggles();

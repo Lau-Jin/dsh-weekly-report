@@ -84,6 +84,7 @@
         <div class="wr-card__head">
           <span class="wr-card__title">系统定时任务</span>
           <span class="wr-card__hint" id="sched-hint"></span>
+          <button class="wr-minibtn" data-path-toggle="schedule" type="button">显示路径</button>
         </div>
         <div class="wr-card__body">
           <div id="schedule" class="wr-muted" style="font-size:12px;line-height:1.7">—</div>
@@ -102,6 +103,7 @@
         <div class="wr-card__head">
           <span class="wr-card__title">最近一次生成</span>
           <span class="wr-card__hint" id="lastrun-hint"></span>
+          <button class="wr-minibtn" data-path-toggle="lastrun" type="button">显示路径</button>
         </div>
         <div class="wr-card__body">
           <div id="last-run" class="wr-muted" style="font-size:12px;line-height:1.7">尚未生成</div>
@@ -112,7 +114,7 @@
         <div class="wr-card__head">
           <span class="wr-card__title">路径</span>
           <span class="wr-card__hint">
-            <button class="wr-minibtn" id="btn-toggle-paths" data-path-toggle type="button">显示路径</button>
+            <button class="wr-minibtn" id="btn-toggle-paths" data-path-toggle="paths" type="button">显示路径</button>
           </span>
         </div>
         <div class="wr-card__body"><dl class="wr-kv" id="paths"></dl></div>
@@ -122,6 +124,7 @@
         <div class="wr-card__head">
           <span class="wr-card__title">面板服务守护</span>
           <span class="wr-card__hint">
+            <button class="wr-minibtn" data-path-toggle="watchdog" type="button">显示路径</button>
             <button class="wr-minibtn" id="btn-wd-toggle" type="button" aria-expanded="false">展开</button>
           </span>
         </div>
@@ -326,7 +329,7 @@
           <input id="report-search" type="search" placeholder="搜索文件名…" />
         </div>
         <button class="wr-btn" id="btn-reload-reports">重新扫描</button>
-        <button class="wr-minibtn" data-path-toggle type="button" style="align-self:center">显示路径</button>
+        <button class="wr-minibtn" data-path-toggle="reports" type="button" style="align-self:center">显示路径</button>
         <span class="wr-field__hint" id="report-hint"></span>
       </div>
       <div class="wr-list" id="report-list"></div>
