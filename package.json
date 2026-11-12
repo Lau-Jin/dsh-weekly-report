@@ -1,28 +1,31 @@
 {
-  "name": "dsh-weekly-report",
-  "version": "0.7.6",
-  "private": true,
-  "type": "module",
-  "description": "DSH 周报面板插件：仓库入口包，实际插件在 dsh-weekly-report/ 子目录。",
-  "main": "./dsh-weekly-report/lib/index.js",
-  "exports": {
-    ".": "./dsh-weekly-report/lib/index.js",
-    "./client": "./dsh-weekly-report/lib/client.js",
-    "./service/*": "./dsh-weekly-report/service/*",
-    "./package.json": "./package.json"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./dsh-weekly-report/cordis.patch.yml"
+    "name": "dsh-weekly-report",
+    "version": "0.7.7",
+    "private": true,
+    "type": "module",
+    "description": "DSH 周报面板插件：仓库入口包，实际插件在 dsh-weekly-report/ 子目录。",
+    "main": "./dsh-weekly-report/lib/index.js",
+    "exports": {
+        ".": "./dsh-weekly-report/lib/index.js",
+        "./client": "./dsh-weekly-report/lib/client.js",
+        "./service/*": "./dsh-weekly-report/service/*",
+        "./package.json": "./package.json",
+        "./icon": "./dsh-weekly-report/icon.svg",
+        "./locale/*.json": "./dsh-weekly-report/locale/*.json"
     },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": []
-    }
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5"
-  },
-  "license": "MIT"
+    "dsh": {
+        "bundle": {
+            "patch": "./dsh-weekly-report/cordis.patch.yml"
+        },
+        "client": {
+            "platform": "web",
+            "immediately": true,
+            "inject": []
+        }
+    },
+    "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.5"
+    },
+    "license": "MIT",
+    "icon": "./dsh-weekly-report/icon.svg"
 }
