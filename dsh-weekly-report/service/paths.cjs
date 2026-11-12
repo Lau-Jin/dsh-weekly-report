@@ -72,11 +72,23 @@ function ensureDirs() {
   }
 }
 
+/** 读 JSON。返回 { ok, data, error } —— 区分「文件不存在」与「文件损坏」。
+
+ * 以前损坏也返回 null，loadConfig 会当成"没有配置" → 静默用默认值覆盖，
+ * 把输出目录、绩效表目录、邮箱授权码全重置掉。
+ */
 function readJson(file) {
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch (_) {
-    return null;
+    raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: false, missing: true, data: null, error: null };
+    return { ok: false, missing: false, data: null, error: String((e && e.message) || e) };
+  }
+  try {
+    return { ok: true, missing: false, data: JSON.parse(raw), error: null };
+  } catch (e) {
+    return { ok: false, missing: false, data: null, error: `JSON 解析失败：${e.message}` };
   }
 }
 
@@ -154,13 +166,26 @@ function migrateFromDir(srcDir) {
 function loadConfig() {
   ensureDirs();
   const existing = readJson(CONFIG);
-  if (existing) return { config: mergeDefaults(existing), migratedFrom: '' };
+  if (existing.ok) return { config: mergeDefaults(existing.data), migratedFrom: '', error: '' };
+  if (!existing.missing) {
+    // 配置损坏：**不要用默认值覆盖**（会把输出目录、绩效表目录、邮箱授权码全重置）。
+    // 先把损坏的文件改名留档，再用默认值重建，让用户能手工捞回来。
+    const broken = `${CONFIG}.corrupt-${ts()}`;
+    try { fs.copyFileSync(CONFIG, broken); fs.renameSync(CONFIG, CONFIG + '.tmp-old'); } catch (_) { /* ignore */ }
+    const base = defaultConfig();
+    try { saveConfig(base); } catch (_) { /* ignore */ }
+    return {
+      config: base, migratedFrom: '',
+      error: `配置文件损坏（${existing.error}），已备份为 ${path.basename(broken)}，并用默认配置重建`,
+    };
+  }
 
   // ① 插件目录内的旧数据（含 config/key/reports/logs）
   const moved = migrateFromDir(LEGACY_PLUGIN_DATA);
 
   const base = defaultConfig();
-  const legacy = readJson(LEGACY_CONFIG);
+  const legacyRes = readJson(LEGACY_CONFIG);
+  const legacy = legacyRes.ok ? legacyRes.data : null;
   let migratedFrom = moved.length ? LEGACY_PLUGIN_DATA : '';
   if (legacy) {
     const l = legacy.notify && legacy.notify.smtp ? legacy.notify.smtp : {};
@@ -219,7 +244,10 @@ function saveConfig(cfg) {
   if (fs.existsSync(CONFIG)) {
     try { fs.copyFileSync(CONFIG, CONFIG + '.bak-' + ts()); } catch (_) { /* ignore */ }
   }
-  fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  // 原子写：先写临时文件再改名（写到一半被杀会留下半截配置）
+  const tmp = CONFIG + '.tmp-' + ts();
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, CONFIG);
   return cfg;
 }
 

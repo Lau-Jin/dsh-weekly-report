@@ -222,6 +222,21 @@ def to_date(v):
     return None
 
 
+def strip_school_prefix(school, title):
+    """标题里如果又带了一遍校名，去掉（否则绩效表里会出现「XX学院XX学院…」）。
+
+    任务侧一直在剥，工单侧没有 → 两边统一。
+    """
+    s = (school or "").strip()
+    x = (title or "").strip()
+    if not s or not x:
+        return x
+    if not x.startswith(s):
+        return x
+    rest = x[len(s):].lstrip(" 　-—:：、,，")
+    return rest or x
+
+
 def split_school(desc):
     if not desc:
         return ""
@@ -1031,7 +1046,8 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
         items.append({
             "category": ticket_category(t),
             "school": t.get("school") or "",
-            "subject": t.get("title") or "",
+            # 标题里又带校名时去掉（绩效表内容 = 校名 + 事项，否则校名会重复两遍）
+            "subject": strip_school_prefix(t.get("school") or "", t.get("title") or ""),
             "time": fmt_range(lo, hi),
             "work": t.get("link") or "",
             "progress": f"{prog}%",
@@ -1084,7 +1100,9 @@ def fetch_my_tasks(token, url=DEFAULT_MCP_URL, tool=TASK_LIST_TOOL, limit=25,
         raise SystemExit(f"MCP 初始化失败：{err}")
 
     out, page = [], 1
-    while page <= 30:
+    # 上限别太小：任务 600+ 条、每页 12 条，之前卡在 30 页（360 条）会静默漏任务
+    max_pages = 200
+    while page <= max_pages:
         resp = call_with_retry(client, tool, {"page": page, "limit": limit})
         err = mcp_error(resp)
         # 任务正文长，响应会撞 64KB 预算：按服务端提示缩小分页重试
@@ -1101,6 +1119,9 @@ def fetch_my_tasks(token, url=DEFAULT_MCP_URL, tool=TASK_LIST_TOOL, limit=25,
         if not items or (isinstance(total, int) and len(out) >= total) or len(items) < limit:
             break
         page += 1
+    if page > max_pages:
+        print(f"警告：任务列表翻到 {max_pages} 页仍未取完，可能还有任务没拉下来"
+              f"（周报与绩效表会漏这些任务）")
     if use_cache:
         cache_write("tasks", out)
     owner = sum(1 for t in out if str(t.get("is_owner")) == "1")
@@ -1633,16 +1654,49 @@ def build_items_from_tasks(tasks, worklogs, handler, ws, we,
 
 
 def merge_items(*groups):
-    """合并多组条目：同一 (学校, 事项) 只留先出现的，最后按开始日期排序。"""
-    out, seen = [], set()
+    """合并多组条目：同一 (学校, 事项) 合成一条，最后按开始日期排序。
+
+    同一件事可能既来自工单、又来自任务中心 —— 原来"先到先得"，任务侧的完成信息会被丢掉，
+    导致周报把已完成的事写成未完成。现在合并：时间取并集、完成取或、进度取大、
+    每周的完成标记也合并（后出现的优先 —— 任务侧的更贴近工时）。
+    """
+    out, index = [], {}
     for group in groups:
         for it in group or []:
             key = (it.get("school") or "", it.get("subject") or "")
-            if key in seen:
+            cur = index.get(key)
+            if cur is None:
+                index[key] = it
+                out.append(it)
                 continue
-            seen.add(key)
-            out.append(it)
-    out.sort(key=lambda x: (x["d1"], x["school"], x["subject"]))
+            d1s = [d for d in (cur.get("d1"), it.get("d1")) if d]
+            d2s = [d for d in (cur.get("d2"), it.get("d2")) if d]
+            if d1s:
+                cur["d1"] = min(d1s)
+            if d2s:
+                cur["d2"] = max(d2s)
+            cur["settled"] = bool(cur.get("settled")) or bool(it.get("settled"))
+            cur["done"] = cur["settled"]
+            cur["settled_platform"] = bool(cur.get("settled_platform")) or bool(it.get("settled_platform"))
+            comps = [c for c in (cur.get("completion"), it.get("completion")) if c]
+            if comps:
+                cur["completion"] = min(comps)
+            marks = dict(cur.get("week_marks") or {})
+            marks.update(it.get("week_marks") or {})
+            cur["week_marks"] = marks
+            wds = list(cur.get("work_dates") or []) + list(it.get("work_dates") or [])
+            cur["work_dates"] = sorted(set(wds))
+            try:
+                p1 = int(str(cur.get("progress") or "0").rstrip("%"))
+                p2 = int(str(it.get("progress") or "0").rstrip("%"))
+                cur["progress"] = f"{max(p1, p2)}%"
+            except (TypeError, ValueError):
+                pass
+            if not cur.get("work") and it.get("work"):
+                cur["work"] = it["work"]
+            if (cur.get("note") in (None, "", "无")) and it.get("note") not in (None, "", "无"):
+                cur["note"] = it["note"]
+    out.sort(key=lambda x: (x.get("d1") or "", x.get("school") or "", x.get("subject") or ""))
     return out
 
 
@@ -2007,8 +2061,12 @@ def perf_key(content):
     return norm(content) or (content or "").strip()
 
 
-def merge_perf_rows(*groups):
-    """把多组条目并成一个月度清单：同一事项只留一行（时间取并集、完成取或）。"""
+def merge_perf_rows(*groups, prefer_new=False):
+    """把多组条目并成一个月度清单：同一事项只留一行（时间取并集、完成取或）。
+
+    prefer_new=True 时，完成标记**以最后一组为准**（核对修复用：
+    表里标了「是」但周报写「未完成」时，要把状态改回来）。
+    """
     merged, index = [], {}
     for group in groups:
         for row in group or []:
@@ -2028,7 +2086,8 @@ def merge_perf_rows(*groups):
             cur["d1"] = min(d1s) if d1s else None
             cur["d2"] = max(d2s) if d2s else None
             # 完成度：同一工单在多周周报里重复出现时，**以完成度 100% 的那条为准**
-            cur["settled"] = bool(cur.get("settled")) or bool(row.get("settled"))
+            cur["settled"] = (bool(row.get("settled")) if prefer_new
+                              else bool(cur.get("settled")) or bool(row.get("settled")))
             if not cur.get("category"):
                 cur["category"] = (row.get("category") or "").strip()
             if (cur.get("note") in (None, "", "无")) and (row.get("note") not in (None, "", "无")):
@@ -2129,6 +2188,43 @@ def _fix_score_formulas(ws):
     return changed
 
 
+def _save_xlsx_atomic(wb, path):
+    """原子保存 xlsx：先写同目录临时文件，再 os.replace 覆盖。
+
+    直接 wb.save(path) 是"边写边覆盖"，中途出错/被杀会留下半截文件。
+    """
+    import tempfile
+    path = os.path.abspath(path)
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".wr_tmp_", suffix=".xlsx", dir=d)
+    os.close(fd)
+    try:
+        wb.save(tmp)
+        os.replace(tmp, path)
+        return path
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _d4_matches_month(d4, year, month):
+    """D4（考核时间）是不是这个月。
+
+    D4 可能是文本（"2026年11月1日-11月30日"），也可能是 Excel 日期单元格 ——
+    两种都要认出来。否则 D4 是日期的模板会被当成"别的月份"，把已累积的行清空。
+    """
+    tag = perf_month_text(year, month)
+    if isinstance(d4, str):
+        return tag in d4
+    if hasattr(d4, "year") and hasattr(d4, "month"):
+        return int(d4.year) == int(year) and int(d4.month) == int(month)
+    return False
+
+
 def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三",
                     accumulate=True):
     """把本月条目写进月度考核表（模板版式保持不变，只填任务行）。
@@ -2149,7 +2245,7 @@ def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三
     existing = []
     if accumulate and same_file:
         d4 = ws.cell(4, 4).value
-        if isinstance(d4, str) and tag in d4:
+        if _d4_matches_month(d4, year, month):
             existing = read_perf_rows(ws, start, cap)
         else:
             print(f"提示：表头月份（{d4}）不是 {tag}，本次按模板重填任务行（不累积旧行）")
@@ -2177,10 +2273,10 @@ def build_perf_xlsx(template_path, out_path, items, year, month, handler="张三
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     try:
-        wb.save(out_path)
+        _save_xlsx_atomic(wb, out_path)
     except PermissionError:
         alt = os.path.splitext(out_path)[0] + "_新.xlsx"
-        wb.save(alt)
+        _save_xlsx_atomic(wb, alt)
         print(f"警告：{out_path} 正被 Excel 占用，已改写到 {alt}，"
               f"关闭 Excel 后重跑即可覆盖原文件")
         return alt
@@ -2322,10 +2418,12 @@ def _range_covers(table_row, expected_row):
 
 
 def check_perf_xlsx(path, year, month, handler="张三", week_items=None,
-                    week_files=None, platform_items=None, fix=False):
+                    week_files=None, platform_items=None, fix=False, platform_fix=False):
     """核对绩效表：内容（对照本月周报）/ 时间 / 完成标记 / 格式。
 
-    返回 (是否通过, 报告文本)。fix=True 时把周报里有的、表里缺的事项补进去。
+    返回 (是否通过, 报告文本)。
+      fix=True         —— 把周报里有的、表里缺的事项补进去，并校正起止时间与完成标记
+      platform_fix=True—— 额外用研发平台整月数据补全（月底最终核对用）
     """
     import openpyxl
 
@@ -2344,9 +2442,13 @@ def check_perf_xlsx(path, year, month, handler="张三", week_items=None,
     problems, tips, content_lines, fix_lines = [], [], [], []
 
     # ---- 先修再核：把本月周报里的事项并进表（缺的补、时间取并集、完成取或） ----
-    if fix and week_items is not None:
-        expected = merge_perf_rows(items_to_perf_rows(week_items))
-        merged = merge_perf_rows(raw_rows, expected)
+    if (fix and week_items is not None) or (platform_fix and platform_items):
+        expected = merge_perf_rows(items_to_perf_rows(week_items or []))
+        if platform_fix and platform_items:
+            # 月底最终核对：把平台整月的数据也并进来（周报没覆盖到的那部分）
+            expected = merge_perf_rows(expected, items_to_perf_rows(platform_items))
+        # 以周报（+平台）为准：状态错的改回来、缺的补上
+        merged = merge_perf_rows(raw_rows, expected, prefer_new=True)
         before = {perf_key(r["content"]): r for r in raw_rows}
         after = {perf_key(r["content"]): r for r in merged}
         added = [after[k] for k in after if k not in before]
@@ -2356,11 +2458,11 @@ def check_perf_xlsx(path, year, month, handler="张三", week_items=None,
             _fix_score_formulas(ws)
             target = path
             try:
-                wb.save(path)
+                _save_xlsx_atomic(wb, path)
             except PermissionError:
                 target = os.path.splitext(path)[0] + "_新.xlsx"
                 try:
-                    wb.save(target)
+                    _save_xlsx_atomic(wb, target)
                     head.append(f"（原文件被 Excel 占用，修补结果写到 {os.path.basename(target)}；"
                                 f"关掉 Excel 后再点一次即可直接写回原文件）")
                 except Exception as e:
@@ -2543,12 +2645,20 @@ def check_perf_xlsx(path, year, month, handler="张三", week_items=None,
 
 
 def perf_check_report(perf_path, year, month, handler="张三", platform_items=None,
-                      fix=False, save_report=True):
-    """跑一次核对，打印报告并写旁边同名 _核对.txt。返回是否通过。"""
+                      fix=False, save_report=True, extra_items=None, platform_fix=False):
+    """跑一次核对，打印报告并写旁边同名 _核对.txt。返回是否通过。
+
+    extra_items：本次刚生成的条目。周报文件用自定义模板时解析不出来，
+    靠它保证"每次生成后都能核对"。
+    """
     week_items, week_files = collect_week_items(year, month)
+    if extra_items:
+        # 解析出来的 + 本次生成的放一起；去重/时间并集由 check 里的 merge 负责
+        week_items = list(week_items) + list(extra_items)
     ok, text = check_perf_xlsx(perf_path, year, month, handler,
                                week_items=week_items, week_files=week_files,
-                               platform_items=platform_items, fix=fix)
+                               platform_items=platform_items, fix=fix,
+                               platform_fix=platform_fix)
     print("")
     print(text)
     print("")
@@ -2767,8 +2877,11 @@ def auto_pick_xlsx(folder, target_date):
     for f in files:
         if tag in os.path.basename(f):
             return f
-    print(f"警告：没有 {target_date.year}年{target_date.month}月 的考核表，改用 {os.path.basename(files[-1])}")
-    return files[-1]
+    # 没有当月的 → 用**修改时间最新**的那张（字典序 files[-1] 会拿到 9 月而不是 11 月）
+    newest = max(files, key=lambda x: (os.path.getmtime(x), x))
+    print(f"警告：没有 {target_date.year}年{target_date.month}月 的考核表，"
+          f"改用最近修改的 {os.path.basename(newest)}")
+    return newest
 
 
 def resolve_token(value):
@@ -2930,8 +3043,12 @@ def send_mail(smtp, subject, body, html=None):
         return False, f"{type(e).__name__}: {e}"
 
 
-def build_mail_html(title, summary, report, miss_text):
-    """邮件 HTML 版：正文内嵌周报，便于在邮箱里直接阅读。"""
+def build_mail_html(title, summary, report, miss_text, perf_html=""):
+    """邮件 HTML 版：正文内嵌周报，便于在邮箱里直接阅读。
+
+    perf_html：绩效表的 HTML 表格（可选）+ 打开链接 —— 邮件里直接看表格，
+    又不用把几十行文字塞进正文。
+    """
     import html as _h
 
     def pre(s):
@@ -2948,6 +3065,9 @@ def build_mail_html(title, summary, report, miss_text):
         "<h3 style=\"margin:18px 0 4px;font-size:15px;\">周报正文</h3>",
         pre(report),
     ]
+    if perf_html:
+        parts.append("<h3 style=\"margin:18px 0 4px;font-size:15px;\">绩效表（本月月度考核表）</h3>")
+        parts.append(perf_html)
     if miss_text:
         parts.append("<h3 style=\"margin:18px 0 4px;font-size:15px;\">未匹配工单清单</h3>")
         parts.append(pre(miss_text))
@@ -2955,6 +3075,46 @@ def build_mail_html(title, summary, report, miss_text):
                  "本邮件由周报自动生成脚本发送</p>")
     parts.append("</div>")
     return "".join(parts)
+
+
+def perf_table_html(path, handler="张三", max_rows=60):
+    """绩效表 → 邮件里的 HTML 表格（限行数），附"点击打开查看"的链接。"""
+    import html as _h
+    try:
+        data = perf_dump(path)
+    except Exception as e:
+        return (f"<p style=\"color:#b42318;\">绩效表读取失败：{_h.escape(str(e))}</p>")
+    rows = data.get("rows") or []
+    head = ("<table border=\"1\" cellspacing=\"0\" cellpadding=\"5\" "
+            "style=\"border-collapse:collapse;font-size:12px;width:100%;\">"
+            "<thead><tr style=\"background:#f0f2f5;\">"
+            "<th align=\"left\">类别</th><th align=\"left\">任务名称</th>"
+            "<th align=\"left\">开始</th><th align=\"left\">结束</th>"
+            "<th align=\"center\">是否完成</th></tr></thead><tbody>")
+    body = ""
+    for r in rows[:max_rows]:
+        ok = "是" if r.get("settled") else "否"
+        color = "#1a7f37" if r.get("settled") else "#9a6700"
+        body += ("<tr>"
+                 f"<td>{_h.escape(r.get('category') or '')}</td>"
+                 f"<td>{_h.escape(r.get('content') or '')}</td>"
+                 f"<td>{_h.escape(r.get('d1_text') or r.get('d1') or '')}</td>"
+                 f"<td>{_h.escape(r.get('d2_text') or r.get('d2') or '')}</td>"
+                 f"<td align=\"center\" style=\"color:{color};font-weight:600;\">{ok}</td>"
+                 "</tr>")
+    if len(rows) > max_rows:
+        body += (f"<tr><td colspan=\"5\" style=\"color:#57606a;\">"
+                 f"…共 {len(rows)} 条，邮件里只列前 {max_rows} 条</td></tr>")
+    body += "</tbody></table>"
+    link = (f"<p style=\"margin:8px 0 0;font-size:12px;\">"
+            f"考核期间 {_h.escape(data.get('period') or '-')}　"
+            f"处理人 {_h.escape(data.get('handler') or handler)}　"
+            f"共 {data.get('total') or 0} 条（已完成 {data.get('done') or 0}）</p>"
+            f"<p style=\"margin:6px 0 0;font-size:12px;\">"
+            f"<a href=\"file:///{_h.escape(str(path).replace(chr(92), '/'))}\" "
+            f"style=\"color:#0969da;\">点击打开绩效表查看完整内容 →</a> "
+            f"<span style=\"color:#8b949e;\">{_h.escape(os.path.basename(path))}</span></p>")
+    return head + body + link
 
 
 def notify(cfg, subject, body, dry_run=False, only=None, html=None, webhook_body=None):
@@ -3894,12 +4054,19 @@ def main():
                     "year": y, "month": m, "count": len(m_items),
                 })
 
-                # 自检：对照本月各周周报补齐缺失；本周覆盖月末时就是月底核对
+                # 自检：每次生成后都核对一次（缺的补、错的改：起止时间与完成标记）
+                #   月底那一轮再额外用平台整月数据补全 —— 保证全月完整
                 month_end_week = any(we >= me - timedelta(days=6) for (_a, we, _b) in segs)
+                plat = [it for it in all_items
+                        if _d(it.get("d1")) and ms <= _d(it.get("d1")) <= me]
+                run_items = [it for (_a, _b, its) in segs for it in its]
                 perf_check_report(built, y, m, handler, fix=True,
-                                  platform_items=(m_items if full_month else None))
+                                  platform_items=plat,
+                                  extra_items=run_items,
+                                  platform_fix=month_end_week)
                 if month_end_week:
-                    print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
+                    print(f"（本轮已覆盖 {y}年{m}月月末：这是月底最终核对，"
+                          f"已用平台整月数据补全）")
 
             # 上个月的绩效表若还没核对过，顺手补一次（纯文本比对，不额外调接口）
             for (y, m) in sorted(perf_months):
@@ -3916,7 +4083,8 @@ def main():
         n = _notify_cfg(cfg)
         if args.notify or n["enabled"]:
             total = sum(a["count"] for a in artifacts["weeks"])
-            schools = len({i["school"] for a in artifacts["weeks"] for i in []}) or 0
+            schools = len({i.get("school") for (_ws, _we, its) in perf_months.items()
+                           for it in its if it.get("school")})
             first = artifacts["weeks"][0] if artifacts["weeks"] else None
             last = artifacts["weeks"][-1] if artifacts["weeks"] else None
             span = (f"{first['start']} ~ {last['end']}" if first and last
@@ -3948,9 +4116,16 @@ def main():
                     perf_lines.append(f"  {a['year']}年{a['month']}月：{a['count']} 条  {a['path']}")
                 body_lines += ["", *perf_lines]
             body = "\n".join(body_lines)
+            perf_html = ""
+            for a in artifacts["perf"]:
+                try:
+                    perf_html += perf_table_html(a["path"], handler)
+                except Exception as e:
+                    perf_html += f"<p style=\"color:#b42318;\">绩效表读取失败：{e}</p>"
             html = build_mail_html(span, summary,
                                   "\n\n".join(report_texts),
-                                  "\n".join(perf_lines))
+                                  "\n".join(perf_lines),
+                                  perf_html=perf_html)
             webhook_body = "\n".join([summary] +
                 [f"周报：{a['path']}" for a in artifacts["reports"]] +
                 [f"绩效表：{a['path']}" for a in artifacts["perf"]])

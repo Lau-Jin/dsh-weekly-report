@@ -420,6 +420,7 @@ async function main() {
     };
   })()`)
   check('往月绩效表按目录（年份）收拢分组', arch.groups >= 1 && arch.groupNames.length === arch.groups, JSON.stringify(arch))
+
   check('每条往月表有自己的展开区', arch.itemHasView === true && arch.viewHidden === true, JSON.stringify(arch))
   await evaluate(client, "document.querySelector('.wr-pitem [data-perf-view]').click()")
   await waitFor(client, "!!document.querySelector('.wr-pitem .wr-pitem__view .wr-ptable')")
@@ -435,6 +436,16 @@ async function main() {
       insideItem: out.closest('.wr-pitem') === item,
     };
   })()`)
+// 展开的内容不能被轮询重画冲掉（15 秒轮询会重画绩效表卡）
+  const sticky = await evaluate(client, `(() => {
+    const it = document.querySelector('.wr-pitem');
+    const out = it.querySelector('.wr-pitem__view');
+    const btn = it.querySelector('[data-perf-view]');
+    return { rows: out.querySelectorAll('.wr-ptable tbody tr').length, btn: btn.textContent.trim(), hidden: out.hidden };
+  })()`)
+  check('展开的往月表有内容', sticky.rows > 0 && sticky.hidden === false, JSON.stringify(sticky))
+  check('展开的往月表有「收起」按钮', sticky.btn === '收起', sticky.btn)
+
   check('点往月表的「查看」→ 内容显示在该条下面',
     archAfter.hidden === false && archAfter.hasTable === true && archAfter.insideItem === true, JSON.stringify(archAfter))
   check('展开后按钮变成「收起」', archAfter.btnText === '收起', archAfter.btnText)
@@ -447,6 +458,14 @@ async function main() {
     const out = item.querySelector('.wr-pitem__view');
     return { hidden: out.hidden, btn: item.querySelector('[data-perf-view]').textContent.trim() };
   })()`)
+  const stickyAfter = await evaluate(client, `(() => {
+    const it = document.querySelector('.wr-pitem');
+    const out = it.querySelector('.wr-pitem__view');
+    const btn = it.querySelector('[data-perf-view]');
+    return { rows: out.querySelectorAll('.wr-ptable tbody tr').length, btn: btn.textContent.trim(), hidden: out.hidden };
+  })()`)
+  check('重画后往月表内容仍在（不是空壳）',
+    stickyAfter.rows > 0 && stickyAfter.hidden === false, JSON.stringify(stickyAfter))
   check('重画后展开的往月表不会被自动收起',
     afterRepaint.hidden === false && afterRepaint.btn === '收起', JSON.stringify(afterRepaint))
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"overview\"]').click()")

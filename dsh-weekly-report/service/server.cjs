@@ -27,7 +27,8 @@ const P = require('./paths.cjs');
 /** 版本号统一从 package.json 读，避免两处不一致 */
 function pluginVersion() {
   try {
-    return P.readJson(path.join(P.PLUGIN_DIR, 'package.json')).version || '0.0.0';
+    const pkg = P.readJson(path.join(P.PLUGIN_DIR, 'package.json'));
+    return (pkg && pkg.ok && pkg.data && pkg.data.version) || '0.0.0';
   } catch (_) {
     return '0.0.0';
   }
@@ -267,6 +268,15 @@ function listPerfTables() {
 // 读一张绩效表要起一次 python（openpyxl 打开 xlsx 约 1s），所以按「路径 + 修改时间」缓存一下，
 // 面板里反复点同一张表（展开/收起）就不用每次都等几秒。
 const perfTableCache = new Map();   // path -> { at, mtimeMs, data }
+const PERF_CACHE_MAX = 40;
+
+/** Map 满了就删最老的一条（缓存不能无限涨）。 */
+function trimCache(map, max) {
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    map.delete(oldest);
+  }
+}
 const PERF_CACHE_TTL = 60 * 1000;
 
 /** 读一张绩效表的内容（走引擎的 --perf-dump，openpyxl 在那边）。 */
@@ -286,6 +296,7 @@ async function readPerfTable(target) {
   if (data.error) return { ok: false, error: data.error, path: data.path || '' };
   const out = { ok: true, table: data };
   perfTableCache.set(target, { at: Date.now(), mtimeMs, data: out });
+  trimCache(perfTableCache, PERF_CACHE_MAX);
   return out;
 }
 
@@ -306,6 +317,21 @@ function _within(base, target) {
   return !rel.split(/[\\/]/).includes('..');
 }
 
+/**
+ * 目标是否真的在 base 之内：**词法与 realpath 两条都要过**。
+ * 之前写的是「或」，词法一旦通过 realpath 的结果就被忽略 → junction/软链可越界。
+ */
+function _safeInside(base, target) {
+  const b = path.resolve(base);
+  const f = path.resolve(target);
+  if (!_within(b, f)) return false;
+  const rb = _realish(b);
+  const rf = _realish(f);
+  if (!_within(rb, rf)) return false;
+  // 目标不存在时 realish 会原样返回，词法判断已够
+  return true;
+}
+
 function openInExplorer(target) {
   const raw = String(target || '').trim();
   if (!raw) return { ok: false, error: '缺少路径' };
@@ -313,11 +339,7 @@ function openInExplorer(target) {
   const full = path.resolve(raw);
   // 允许的范围：周报输出目录 + 绩效表目录（两者都可能带年份子目录）
   const roots = [reportsDir(), perfRoot()].filter(Boolean).map((d) => path.resolve(d));
-  const ok = roots.some((base) => {
-    const realBase = _realish(base);
-    const realFull = _realish(full);
-    return _within(base, full) || _within(realBase, realFull);
-  });
+  const ok = roots.some((base) => _safeInside(base, full));
   if (!ok) {
     return { ok: false, error: '只能打开周报输出目录或绩效表目录内的位置' };
   }
@@ -422,16 +444,33 @@ function pushLine(line) {
   if (run.lines.length > 600) run.lines.splice(0, run.lines.length - 600);
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
+/** 校验日期/月份格式，不合法就给出人话错误（别让 Python 抛堆栈）。 */
+function validDate(s) {
+  if (!DATE_RE.test(String(s || ''))) return false;
+  const d = new Date(`${s}T00:00:00`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === String(s);
+}
+
 function resolvePeriod(body) {
   const args = ['--config', P.CONFIG];
   if (body.period === 'range' && body.start && body.end) {
     // 指定区间：**区间内每一周各出一份**周报（引擎按自然周拆）
+    if (!validDate(body.start) || !validDate(body.end)) {
+      throw new Error('日期格式应为 YYYY-MM-DD');
+    }
+    if (String(body.end) < String(body.start)) {
+      throw new Error('结束日期不能早于开始日期');
+    }
     args.push('--start', String(body.start), '--end', String(body.end));
   } else if (body.period === 'last') {
     args.push('--week', 'last');
   } else if (body.period === 'lastMonth') {
     args.push('--last-month');
   } else if (body.period === 'month' && body.month) {
+    if (!MONTH_RE.test(String(body.month))) throw new Error('月份格式应为 YYYY-MM');
     args.push('--month', String(body.month));
   } else {
     args.push('--week', 'current');
@@ -450,7 +489,13 @@ function startRun(body) {
   if (!key) return { ok: false, error: '还没有配置 API Key' };
 
   const py = findPython();
-  const args = [P.ENGINE, ...resolvePeriod(body)];
+  let args;
+  try {
+    args = [P.ENGINE, ...resolvePeriod(body)];
+  } catch (e) {
+    // 参数不合法 → 给一句人话，不让 Python 抛堆栈
+    return { ok: false, error: e.message || '参数不合法' };
+  }
   run = {
     running: true, startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
     lines: [], args, outPath: '', error: '', child: null,
@@ -587,9 +632,28 @@ function json(res, code, obj) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    // 不开放 CORS：面板是同源 iframe，本来就不需要。
+    // 之前这里是 '*'，任意网页都能读这个接口，还能让服务端把 API Key 发给攻击者的地址。
   });
   res.end(body);
+}
+
+/**
+ * 只接受同源请求（防跨站调用：改配置、发信、读文件…）。
+ * 判据：Origin 的 host:port 与本次请求的 Host 一致 —— 不能写死 127.0.0.1，
+ * 否则换个访问方式（localhost / 局域网 IP）自己的面板会被误拒。
+ */
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;               // 没有 Origin（同源 GET / curl）→ 放行
+  try {
+    const u = new URL(origin);
+    const host = String(req.headers.host || '');
+    if (!host) return false;
+    return u.host.toLowerCase() === host.toLowerCase();
+  } catch (_) {
+    return false;
+  }
 }
 
 function readBody(req) {
@@ -733,8 +797,9 @@ async function buildState(force) {
 function serveStatic(res, urlPath) {
   let rel = urlPath === '/' ? '/index.html' : urlPath;
   rel = decodeURIComponent(rel);
-  const full = path.join(PUBLIC_DIR, rel);
-  if (!full.startsWith(PUBLIC_DIR)) { json(res, 403, { error: 'forbidden' }); return; }
+  const full = path.resolve(PUBLIC_DIR, '.' + rel);
+  // 用路径分量判断（startsWith 会把同前缀的兄弟目录也算进去）
+  if (!_within(PUBLIC_DIR, full)) { json(res, 403, { error: 'forbidden' }); return; }
   fs.readFile(full, (err, buf) => {
     if (err) { json(res, 404, { error: 'not found' }); return; }
     res.writeHead(200, {
@@ -750,12 +815,14 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-    });
+    res.writeHead(204, { 'Allow': 'GET,POST,HEAD' });
     res.end();
+    return;
+  }
+
+  // 跨站请求一律拒绝（浏览器发来的跨站请求会带 Origin）
+  if (!sameOrigin(req)) {
+    json(res, 403, { ok: false, error: '拒绝跨站请求' });
     return;
   }
 
@@ -908,6 +975,11 @@ const server = http.createServer(async (req, res) => {
 
     // 绩效表核对：对照本月各周周报，缺的补进当月表，报告写在表旁边
     if (req.method === 'POST' && p === '/api/perf-check') {
+      // 生成过程中也会写绩效表 —— 两个进程同时 openpyxl.save 同一个 xlsx 会写坏
+      if (run.running) {
+        json(res, 409, { ok: false, error: '正在生成，请等生成结束再核对（避免同时写同一个绩效表）' });
+        return;
+      }
       const body = JSON.parse(await readBody(req) || '{}');
       const py = findPython();
       const args = [P.ENGINE, '--config', P.CONFIG, '--perf-check', '--perf-fix'];
@@ -1047,7 +1119,9 @@ const server = http.createServer(async (req, res) => {
       const target = url.searchParams.get('path') || '';
       const base = path.resolve(reportsDir());
       const full = path.resolve(target);
-      if (!full.startsWith(base) || !/周报_.*\.txt$/.test(full) || !fs.existsSync(full)) {
+      // 用路径分量判断 + 文件名判断（startsWith 会把 reports_2025 这类同前缀兄弟目录算进去）
+      const okName = /^周报_.*\.txt$/.test(path.basename(full));
+      if (!_within(base, full) || !okName || !fs.existsSync(full)) {
         json(res, 403, { ok: false, error: '不允许读取该路径' });
         return;
       }

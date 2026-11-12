@@ -208,7 +208,10 @@ function renderLastRun(run) {
 }
 
 /* ---------------------------------------------------------------- 渲染：表单 */
-function fillConfig(cfg, keyInfo) {
+function fillConfig(cfg, keyInfo, force) {
+  // 轮询每 15 秒会调一次；用户正在改表单时**不能覆盖**（否则刚粘的 API Key、
+  // 邮箱授权码会被静默清掉，"有未保存修改"的提示也会消失）。
+  if (!force && state.dirty) return;
   const set = (id, v) => { const el = $(id); if (el) el.value = v == null ? '' : v; };
   set('#mcp-url', cfg.mcp_url);
   set('#handler', cfg.handler);
@@ -228,11 +231,14 @@ function fillConfig(cfg, keyInfo) {
   set('#smtp-port', s.port);
   set('#smtp-user', s.user);
   set('#smtp-to', (s.to || []).join(', '));
-  $('#smtp-pass').value = '';
   $('#pass-hint').textContent = s.password ? `已保存 ${s.password}` : '未设置';
   $('#key-hint').textContent = keyInfo && keyInfo.present ? `${keyInfo.masked}` : '未配置';
-  $('#api-key').value = '';
-  setDirty(false);
+  // 只有在"没有未保存修改"时才清掉这两个输入框（保存成功后本来也会清）
+  if (force || !state.dirty) {
+    $('#api-key').value = '';
+    $('#smtp-pass').value = '';
+    setDirty(false);
+  }
 }
 
 function setDirty(v) {
@@ -354,13 +360,33 @@ function renderPerf(perf) {
  * 不记住的话用户刚点开就被收起了（"在查看某月绩效表中，会自动收起"）。
  */
 const perfOpen = { groups: new Set(), items: new Set() };
+// 展开的往月表内容（路径 → HTML）：重建 DOM 时原样恢复
+const perfViewCache = new Map();   // 路径 → 展开内容的 HTML
+const perfViewMeta = new Map();    // 路径 → { size, mtime }（判断文件是否被重新生成）
+
+// 往月绩效表：数据没变就不重建 DOM —— 重建会让展开的表"突然消失"
+let archiveSig = '';
 
 function renderPerfArchive(tables, current) {
   const archive = $('#perf-archive');
   const list = $('#perf-archive-list');
   if (!archive || !list) return;
   archive.hidden = !tables.length;
-  if (!tables.length) { list.innerHTML = ''; return; }
+  if (!tables.length) { list.innerHTML = ''; archiveSig = ''; return; }
+
+  const sig = JSON.stringify(tables.map((x) => [x.path, x.name, x.size, x.mtime]));
+  if (sig === archiveSig) return;       // 保持现状（展开的内容不丢）
+  archiveSig = sig;
+  // 文件变了（重新生成过）→ 旧的展开内容作废
+  for (const x of tables) {
+    const old = perfViewMeta.get(x.path);
+    if (old && (old.size !== x.size || old.mtime !== x.mtime)) {
+      perfViewCache.delete(x.path);
+      perfViewMeta.delete(x.path);
+      perfOpen.items.delete(x.path);
+    }
+    perfViewMeta.set(x.path, { size: x.size, mtime: x.mtime });
+  }
 
   // 按目录（年份）分组
   const groups = new Map();
@@ -392,7 +418,7 @@ function renderPerfArchive(tables, current) {
               <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">${isOpen ? '收起' : '查看'}</button>
               <button class="wr-btn wr-btn--ghost" data-perf-open="${esc(t.dirAbs || '')}">打开目录</button>
             </div>
-            <div class="wr-pitem__view"${isOpen ? '' : ' hidden'}></div>
+            <div class="wr-pitem__view"${isOpen ? '' : ' hidden'}>${perfViewCache.get(t.path) || ''}</div>
           </div>`;
         }).join('')}
       </div>
@@ -414,8 +440,10 @@ async function togglePerfItem(path, btn) {
     // 滚到这一条，让人看到自己在看哪一张（不跳到页面最上面）
     try { item.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) { /* ignore */ }
     await viewPerfTable(path, out);
+    perfViewCache.set(path, out.innerHTML);
   } else {
     perfOpen.items.delete(path);
+    perfViewCache.delete(path);
     out.hidden = true;
     out.innerHTML = '';
     btn.textContent = '查看';
@@ -557,15 +585,26 @@ function setLogState(run) {
   text.textContent = run.exitCode === 0 ? '生成完成' : `已结束（退出码 ${run.exitCode}）`;
 }
 
-/** 结果模块里就地展开 / 收起某一条（周报看正文，绩效表看表格）。 */
+/** 结果模块里就地展开 / 收起某一条（周报看正文，绩效表看表格）。
+
+ * 展开的内容记在 resultOpen（路径 → HTML），这样轮询重画时能原样恢复，
+ * 不会"刷新一下就没了"，也不会把按钮文字退回「查看」。
+ */
+const resultOpen = new Map();          // 路径 → 展开内容的 HTML
+const resultOpenMeta = new Map();      // 路径 → { count }
+const resultCounts = new Map();        // 路径 → 本次产物的条数
+
 async function toggleResultView(btn, kind) {
   const item = btn.closest('.wr-res__item');
   const out = item && item.querySelector('.wr-res__view');
   if (!out) return;
+  const path = kind === 'perf' ? btn.dataset.resPerf : btn.dataset.resView;
   const open = out.hidden;
   if (!open) {
     out.hidden = true;
     out.innerHTML = '';
+    resultOpen.delete(path);
+    resultOpenMeta.delete(path);
     btn.textContent = '查看';
     return;
   }
@@ -573,28 +612,60 @@ async function toggleResultView(btn, kind) {
   btn.textContent = '收起';
   out.innerHTML = '<div class="wr-muted">正在读取…</div>';
   try {
+    let html = '';
     if (kind === 'perf') {
-      const r = await api('/api/perf/table?path=' + encodeURIComponent(btn.dataset.resPerf));
-      if (!r.ok) { out.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(r.error || '未知原因')}</div>`; return; }
-      out.innerHTML = perfTableHtml(r.table || {});
+      const r = await api('/api/perf/table?path=' + encodeURIComponent(path));
+      if (!r.ok) {
+        out.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(r.error || '未知原因')}</div>`;
+        resultOpen.delete(path);
+        return;
+      }
+      html = perfTableHtml(r.table || {});
     } else {
-      const r = await api('/api/report?path=' + encodeURIComponent(btn.dataset.resView));
-      out.innerHTML = `<pre class="wr-pre wr-pre--perf">${esc(r.text || '(空)')}</pre>`;
+      const r = await api('/api/report?path=' + encodeURIComponent(path));
+      html = `<pre class="wr-pre wr-pre--perf">${esc(r.text || '(空)')}</pre>`;
     }
+    out.innerHTML = html;
+    resultOpen.set(path, html);
+    resultOpenMeta.set(path, { count: resultCounts.get(path) });
   } catch (e) {
     out.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(e.message)}</div>`;
+    resultOpen.delete(path);
   }
 }
 
 /** 生成结果：周报 / 绩效表 两个模块分别列出本次产物。 */
+// 结果模块：数据没变就别重建 DOM —— 重建会把用户展开的内容冲掉（"查看后自动收起"）
+let resultSig = '';
+
 function renderResult(run) {
   const card = $('#result-card');
   if (!card) return;
   const art = (run && run.artifacts) || { reports: [], perf: [], weeks: [] };
   const reports = art.reports || [];
   const perf = art.perf || [];
-  if (!reports.length && !perf.length) { card.hidden = true; return; }
+  if (!reports.length && !perf.length) {
+    card.hidden = true;
+    resultSig = '';
+    return;
+  }
   card.hidden = false;
+
+  const sig = JSON.stringify([reports.map((a) => [a.path, a.count, a.start, a.end]),
+    perf.map((a) => [a.path, a.count])]);
+  if (sig === resultSig) {
+    const hint0 = $('#result-hint');
+    if (hint0) hint0.textContent = `${reports.length} 份周报 · ${perf.length} 份绩效表`;
+    return;                       // 内容没变 → 保持现状（不收起、不清空）
+  }
+  resultSig = sig;
+  // 条数变了说明文件被重新生成过 → 旧的展开内容作废
+  for (const [path, meta] of resultOpenMeta) {
+    if (!resultCounts.get(path) || resultCounts.get(path) !== meta.count) {
+      resultOpen.delete(path);
+      resultOpenMeta.delete(path);
+    }
+  }
 
   const repBox = $('#result-reports');
   repBox.innerHTML = reports.length ? reports.map((a) => `
@@ -605,8 +676,9 @@ function renderResult(run) {
       </div>
       <button class="wr-btn wr-btn--ghost" data-res-view="${esc(a.path)}">查看</button>
       <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
-      <div class="wr-res__view" hidden></div>
+      <div class="wr-res__view"${resultOpen.has(a.path) ? '' : ' hidden'}>${resultOpen.get(a.path) || ''}</div>
     </div>`).join('') : '<div class="wr-muted">本次没有生成周报</div>';
+  reports.forEach((a) => resultCounts.set(a.path, a.count));
 
   const perfBox = $('#result-perf');
   perfBox.innerHTML = perf.length ? perf.map((a) => `
@@ -617,8 +689,9 @@ function renderResult(run) {
       </div>
       <button class="wr-btn wr-btn--ghost" data-res-perf="${esc(a.path)}">查看</button>
       <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
-      <div class="wr-res__view" hidden></div>
+      <div class="wr-res__view"${resultOpen.has(a.path) ? '' : ' hidden'}>${resultOpen.get(a.path) || ''}</div>
     </div>`).join('') : '<div class="wr-muted">本次没有写绩效表（可看「模板自检」：目录里可能还没有模板）</div>';
+  perf.forEach((a) => resultCounts.set(a.path, a.count));
 
   const hint = $('#result-hint');
   if (hint) hint.textContent = `${reports.length} 份周报 · ${perf.length} 份绩效表`;
@@ -684,6 +757,12 @@ function applyState(data) {
   renderReports(data.reports || []);
   renderPerf(data.perf);
   renderReportTemplate(data.templates);
+  // 配置损坏之类的严重问题要显眼地报出来（以前是静默重置成默认值）
+  const cfgErr = $('#cfg-error');
+  if (cfgErr) {
+    cfgErr.hidden = !data.configError;
+    if (data.configError) cfgErr.textContent = '⚠ ' + data.configError;
+  }
   fillConfig(data.config || {}, data.key);
   renderRun(data.run);
 }
