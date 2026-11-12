@@ -194,6 +194,7 @@ function listReports() {
           name: e.name,
           path: full,
           dir: path.relative(outDir, path.dirname(full)) || '.',
+          dirAbs: path.dirname(full),          // 绝对目录：面板上「打开目录」与「显示路径」用
           size: st.size,
           mtime: st.mtime.toISOString(),
           entries: countEntries(full),
@@ -204,6 +205,35 @@ function listReports() {
   walk(outDir, 0);
   out.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
   return out;
+}
+
+// ---------------------------------------------------------------- 打开目录
+/** 在资源管理器里打开目录（文件则打开所在目录并选中它）。
+
+ * 只允许打开周报输出目录以内的位置，免得接口变成任意路径打开器。
+ */
+function openInExplorer(target) {
+  const raw = String(target || '').trim();
+  if (!raw) return { ok: false, error: '缺少路径' };
+  if (process.platform !== 'win32') return { ok: false, error: '当前系统暂不支持直接打开目录' };
+  const base = path.resolve(reportsDir());
+  const full = path.resolve(raw);
+  const rel = path.relative(base, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { ok: false, error: '只能打开周报输出目录内的位置' };
+  }
+  let stat;
+  try { stat = fs.statSync(full); } catch (_) { return { ok: false, error: '路径不存在' }; }
+  const isFile = stat.isFile();
+  try {
+    const child = spawn('explorer.exe', isFile ? [`/select,${full}`] : [full], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+  return { ok: true, opened: full, selected: isFile };
 }
 
 // ---------------------------------------------------------------- 注意事项
@@ -724,6 +754,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/api/reports') {
       json(res, 200, { ok: true, reports: listReports() });
+      return;
+    }
+
+    // 在资源管理器里打开周报目录（文件则打开所在目录并选中）
+    if (req.method === 'POST' && p === '/api/open-dir') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const r = openInExplorer(body.path);
+      json(res, r.ok ? 200 : 400, r);
       return;
     }
 

@@ -246,7 +246,9 @@ function renderReports(reports) {
   const q = state.reportQuery.trim().toLowerCase();
   const list = q ? reports.filter((r) => r.name.toLowerCase().includes(q)) : reports;
   $('#report-hint').textContent = `${list.length} / ${reports.length} 份`;
-  setPathToggle('reports', list.some((r) => r && r.dir));
+  const hasDir = list.some((r) => r && (r.dirAbs || r.dir));
+  const openRoot = $('#btn-open-outdir');
+  if (openRoot) openRoot.hidden = !hasDir;
   if (!list.length) {
     box.innerHTML = `<div class="wr-empty">${reports.length ? '没有匹配的文件' : '还没生成过周报'}</div>`;
     return;
@@ -256,12 +258,24 @@ function renderReports(reports) {
       <div class="wr-rep">
         <div style="min-width:0;flex:1 1 auto">
           <div class="wr-rep__name">${esc(r.name)}</div>
-          <div class="wr-rep__sub">${pathShown.reports ? esc(r.dir) : '路径已隐藏'} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
+          <div class="wr-rep__sub">${esc(r.dir || '.')} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
         </div>
+        <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(r.dirAbs || r.dir)}" title="在资源管理器里打开所在目录">打开目录</button>
         <button class="wr-btn" data-view="${esc(r.path)}">查看</button>
       </div>
     </div>`).join('');
   box._items = list;
+}
+
+/** 在资源管理器里打开目录（服务端只允许周报输出目录以内的位置）。 */
+async function openDir(target, label) {
+  if (!target) { toast('没有可打开的目录', 'err'); return; }
+  try {
+    const r = await post('/api/open-dir', { path: target });
+    toast(r.ok ? `已打开${label ? '：' + label : '目录'}` : ('打开失败：' + (r.error || '未知原因')), r.ok ? 'ok' : 'err');
+  } catch (e) {
+    toast('打开失败：' + e.message, 'err');
+  }
 }
 
 async function openReport(path, name) {
@@ -622,6 +636,15 @@ function bindActions() {
     } catch (e) { toast('失败：' + e.message, 'err'); }
   };
 
+  // 打开周报输出目录（历史工具栏）
+  const openOut = $('#btn-open-outdir');
+  if (openOut) {
+    openOut.onclick = () => {
+      const dir = (state.data && state.data.paths && state.data.paths.outDir) || '';
+      void openDir(dir, '周报输出目录');
+    };
+  }
+
   // 绩效表核对：对照本月各周周报，缺的事项自动补进当月表
   $('#btn-perf-check').onclick = async () => {
     const pre = $('#perf-check-out');
@@ -667,6 +690,12 @@ function bindActions() {
   });
 
   $('#report-list').addEventListener('click', (e) => {
+    const openBtn = e.target.closest('[data-open-dir]');
+    if (openBtn) {
+      e.stopPropagation();
+      void openDir(openBtn.dataset.openDir, openBtn.closest('.wr-item')?.querySelector('.wr-rep__name')?.textContent || '');
+      return;
+    }
     const btn = e.target.closest('[data-view]');
     if (!btn) return;
     const list = $('#report-list')._items || [];

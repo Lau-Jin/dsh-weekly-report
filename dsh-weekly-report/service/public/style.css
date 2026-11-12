@@ -290,6 +290,11 @@ html, body {
 .wr-btn--primary:hover { filter: brightness(1.05); background: var(--accent); color: #fff; }
 .wr-btn--danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
 .wr-btn--danger:hover { background: color-mix(in srgb, var(--err) 8%, transparent); border-color: var(--err); }
+.wr-btn--ghost {
+  border-color: transparent; background: transparent; color: var(--fg-3);
+  padding: 5px 10px; font-size: 12px;
+}
+.wr-btn--ghost:hover { border-color: var(--line); background: var(--bg-soft); color: var(--fg); }
 .wr-btn--block { width: 100%; }
 .wr-btn--lg { padding: 10px 16px; font-size: 13px; }
 

@@ -94,7 +94,11 @@ const evaluate = async (client, expression) => {
   const r = await client.send('Runtime.evaluate', {
     expression, returnByValue: true, awaitPromise: true,
   })
-  if (r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'evaluate failed')
+  if (r.exceptionDetails) {
+    const d = r.exceptionDetails
+    throw new Error('evaluate failed: ' + (d.exception?.description || d.text || 'unknown')
+      + ' | expr: ' + expression.slice(0, 200))
+  }
   return r.result.value
 }
 
@@ -129,13 +133,11 @@ async function main() {
         paths: btn('paths') && btn('paths').textContent.trim(),
         schedule: btn('schedule') && btn('schedule').textContent.trim(),
         lastrun: btn('lastrun') && btn('lastrun').textContent.trim(),
-        reports: btn('reports') && btn('reports').textContent.trim(),
       },
       visible: {
         paths: !!(btn('paths') && !btn('paths').hidden),
         schedule: !!(btn('schedule') && !btn('schedule').hidden),
         lastrun: !!(btn('lastrun') && !btn('lastrun').hidden),
-        reports: !!(btn('reports') && !btn('reports').hidden),
       },
       hasPath: {
         // 「这块有没有路径」看数据，不看当前是否遮着：路径卡有 dd 且不是「未获取到路径」；
@@ -143,7 +145,6 @@ async function main() {
         paths: document.querySelectorAll('#paths dd').length > 0 && !document.querySelector('#paths').innerHTML.includes('未获取到路径'),
         schedule: !!document.querySelector('#schedule .wr-mono'),
         lastrun: !!document.querySelector('#last-run .wr-mono'),
-        reports: document.querySelectorAll('#report-list .wr-item').length > 0,
       },
     };
   })()`)
@@ -160,13 +161,13 @@ async function main() {
   check('最近一次生成有自己的开关', s.labels.lastrun === '显示路径', JSON.stringify(s.labels))
   check('默认全部隐藏', s.pathsHidden && s.schedHidden, JSON.stringify(s))
   // 开关只出现在「这块真的有路径」的地方，没有路径的块不给按钮
-  for (const key of ['paths', 'schedule', 'lastrun', 'reports']) {
+  for (const key of ['paths', 'schedule', 'lastrun']) {
     if (!s.visible[key] && !s.hasPath[key]) continue;
     check(`开关显隐与内容一致（${key}）`, s.visible[key] === s.hasPath[key],
       `visible=${s.visible[key]} hasPath=${s.hasPath[key]}`);
   }
   check('没有路径就不显示开关（至少验证一个无路径情形）',
-    ['paths', 'schedule', 'lastrun', 'reports'].some((k) => !s.visible[k] || !s.hasPath[k]) ||
+    ['paths', 'schedule', 'lastrun'].some((k) => !s.visible[k] || !s.hasPath[k]) ||
     (s.visible.paths && s.hasPath.paths))
 
   // 3. 只开路径卡：其它卡不受影响
@@ -192,19 +193,29 @@ async function main() {
   check('关掉路径卡后只它隐藏', s.pathsHidden && !s.schedHidden)
   check('关掉的按钮文字回到「显示路径」', s.labels.paths === '显示路径', s.labels.paths)
 
-  // 7. 历史页开关独立（历史目录）
-  const histHiddenBefore = await evaluate(client, "document.querySelector('#report-list').innerHTML.includes('路径已隐藏') || document.querySelector('#report-list').innerHTML.includes('还没生成过周报')")
-  check('历史列表目录默认隐藏（或无记录）', histHiddenBefore)
-  check('历史工具栏有自己的开关', (await evaluate(client, "document.querySelector('[data-path-toggle=\"reports\"]').textContent.trim()")) === '显示路径')
+  // 7. 历史模块：每条都有「打开目录」，工具栏有「打开周报目录」
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"reports\"]').click()")
-  await sleep(300)
-  await evaluate(client, "document.querySelector('[data-path-toggle=\"reports\"]').click()")
-  await sleep(250)
-  check('历史开关点了之后文字变「隐藏路径」', (await evaluate(client, "document.querySelector('[data-path-toggle=\"reports\"]').textContent.trim()")) === '隐藏路径')
+  await sleep(400)
+  const hist = await evaluate(client, `(() => {
+    const items = Array.from(document.querySelectorAll('#report-list .wr-item'));
+    return {
+      n: items.length,
+      openBtns: items.filter((it) => it.querySelector('[data-open-dir]')).length,
+      firstDir: items[0] && items[0].querySelector('[data-open-dir]') ? items[0].querySelector('[data-open-dir]').dataset.openDir : '',
+      subHasDir: items[0] ? items[0].querySelector('.wr-rep__sub').textContent.indexOf(String.fromCharCode(24180)) >= 0 : false,
+      rootBtn: !!document.querySelector('#btn-open-outdir'),
+      rootBtnHidden: document.querySelector('#btn-open-outdir') ? document.querySelector('#btn-open-outdir').hidden : true,
+      stillHasToggle: !!document.querySelector('[data-path-toggle="reports"]'),
+    };
+  })()`)
+  check('历史不再有「显示路径」开关（没有作用，改成打开目录）', hist.stillHasToggle === false)
+  check('每条周报都有「打开目录」按钮', hist.n > 0 && hist.openBtns === hist.n, JSON.stringify(hist))
+  check('「打开目录」带的是绝对路径', hist.firstDir.length > 2 && hist.firstDir.charAt(1) === ':' && hist.firstDir.charAt(2) === String.fromCharCode(92), hist.firstDir)
+  check('工具栏有「打开周报目录」按钮', hist.rootBtn === true && hist.rootBtnHidden === false, JSON.stringify(hist))
 
   // 8. localStorage 按卡片记
   const saved = JSON.parse(await evaluate(client, "window.localStorage.getItem('wr-show-paths')"))
-  check('localStorage 按卡片记状态', saved && saved.paths === false && saved.schedule === true && saved.reports === true, JSON.stringify(saved))
+  check('localStorage 按卡片记状态', saved && saved.paths === false && saved.schedule === true, JSON.stringify(saved))
 
   // 9. 按钮名称
   const schedBtn = await evaluate(client, "document.querySelector('#btn-sched-install').textContent.trim()")
@@ -238,8 +249,6 @@ async function main() {
     seen.scheduleWithoutPath = b('schedule').hidden;
     d.renderLastRun({ lines: [] });
     seen.lastrunWithoutPath = b('lastrun').hidden;
-    d.renderReports([]);
-    seen.reportsWithoutPath = b('reports').hidden;
     d.renderPaths({});
     seen.pathsWithoutPath = b('paths').hidden;
     // 再喂回有路径的数据，按钮应该回来
@@ -253,10 +262,28 @@ async function main() {
   })()`)
   check('没有路径时：定时任务不给开关', noPath.scheduleWithoutPath === true, JSON.stringify(noPath))
   check('没有路径时：最近一次生成不给开关', noPath.lastrunWithoutPath === true, JSON.stringify(noPath))
-  check('没有路径时：历史不给开关', noPath.reportsWithoutPath === true, JSON.stringify(noPath))
   check('没有路径时：路径卡不给开关', noPath.pathsWithoutPath === true, JSON.stringify(noPath))
   check('有路径时：开关回来（定时任务 / 最近一次生成 / 路径卡）',
     noPath.scheduleWithPath && noPath.lastrunWithPath && noPath.pathsWithPath, JSON.stringify(noPath))
+
+  // 9.7 打开目录接口：输出目录内放行、目录外拒绝、空路径拒绝
+  const openApi = await evaluate(client, `(async () => {
+    const post = async (body) => {
+      const r = await fetch('/api/open-dir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, data: await r.json() };
+    };
+    const state = await (await fetch('/api/state')).json();
+    const dir = state.paths.outDir;
+    const inside = state.reports.length ? state.reports[0].dirAbs : dir;
+    return {
+      inside: await post({ path: inside }),
+      outside: await post({ path: 'C:/Windows' }),
+      empty: await post({}),
+    };
+  })()`)
+  check('open-dir：输出目录内的路径放行', openApi.inside.status === 200 && openApi.inside.data.ok === true, JSON.stringify(openApi.inside))
+  check('open-dir：目录外路径被拒绝', openApi.outside.status === 400 && openApi.outside.data.ok === false, JSON.stringify(openApi.outside))
+  check('open-dir：空路径被拒绝', openApi.empty.status === 400 && openApi.empty.data.ok === false, JSON.stringify(openApi.empty))
 
   // 10. 刷新后保持（各卡的状态各自恢复）
   await client.send('Page.reload', {})

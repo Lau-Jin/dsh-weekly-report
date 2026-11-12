@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "description": "DSH 周报面板插件：仓库入口包，实际插件在 dsh-weekly-report/ 子目录。",
