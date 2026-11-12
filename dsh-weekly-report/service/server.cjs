@@ -209,6 +209,73 @@ function listReports() {
   return out;
 }
 
+// ---------------------------------------------------------------- 绩效表
+/** 绩效表根目录（配置里的「绩效表目录」，可能指向某一年那一层）。 */
+function perfRoot() {
+  const cfg = getConfig();
+  const raw = String(cfg.folder || '').trim();
+  if (!raw) return '';
+  let dir = path.isAbsolute(raw) ? raw : path.resolve(P.ENGINE_DIR, raw);
+  // 配置里写的是 "…\\绩效表\\2026" 这种年份目录时，根目录是它的上一层
+  if (/^\d{4}$/.test(path.basename(dir))) dir = path.dirname(dir);
+  return dir;
+}
+
+/** 当月绩效表路径（与引擎 perf_path_for 保持一致）。 */
+function perfFileFor(year, month) {
+  const root = perfRoot();
+  if (!root) return '';
+  const cfg = getConfig();
+  const handler = String(cfg.handler || '张三');
+  return path.join(root, String(year),
+    `${year}年${month}月${handler}员工月度考核表-交付中心.xlsx`);
+}
+
+/** 列出绩效表目录下的月度考核表（按月份倒序）。 */
+function listPerfTables() {
+  const root = perfRoot();
+  if (!root || !fs.existsSync(root)) return [];
+  const out = [];
+  const walk = (dir, depth) => {
+    if (depth > 3) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!/\.xlsx$/i.test(e.name) || /^~/.test(e.name)) continue;
+      try {
+        const st = fs.statSync(full);
+        out.push({
+          name: e.name,
+          path: full,
+          dir: path.relative(root, path.dirname(full)) || '.',
+          dirAbs: path.dirname(full),
+          inRoot: path.resolve(path.dirname(full)) === path.resolve(root),
+          size: st.size,
+          mtime: st.mtime.toISOString(),
+        });
+      } catch (_) { /* ignore */ }
+    }
+  };
+  walk(root, 0);
+  out.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+  return out;
+}
+
+/** 读一张绩效表的内容（走引擎的 --perf-dump，openpyxl 在那边）。 */
+async function readPerfTable(target) {
+  const py = findPython();
+  const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--perf-dump',
+    '--perf-xlsx', target], { timeout: 60000, cwd: P.ENGINE_DIR });
+  const line = (r.out || '').trim().split(/\r?\n/).filter((l) => l.trim().startsWith('{')).pop();
+  let data = null;
+  try { data = JSON.parse(line || '{}'); } catch (_) { data = null; }
+  if (!data) return { ok: false, error: (r.out || '').slice(-400) || '读取绩效表失败' };
+  if (data.error) return { ok: false, error: data.error, path: data.path || '' };
+  return { ok: true, table: data };
+}
+
 // ---------------------------------------------------------------- 打开目录
 /** 在资源管理器里打开目录（文件则打开所在目录并选中它）。
 
@@ -230,13 +297,16 @@ function openInExplorer(target) {
   const raw = String(target || '').trim();
   if (!raw) return { ok: false, error: '缺少路径' };
   if (process.platform !== 'win32') return { ok: false, error: '当前系统暂不支持直接打开目录' };
-  const base = path.resolve(reportsDir());
   const full = path.resolve(raw);
-  // 再按真实路径比一次：目录是 junction / 软链时 realpath 才是同一个地方
-  const realBase = _realish(base);
-  const realFull = _realish(full);
-  if (!_within(base, full) && !_within(realBase, realFull)) {
-    return { ok: false, error: '只能打开周报输出目录内的位置' };
+  // 允许的范围：周报输出目录 + 绩效表目录（两者都可能带年份子目录）
+  const roots = [reportsDir(), perfRoot()].filter(Boolean).map((d) => path.resolve(d));
+  const ok = roots.some((base) => {
+    const realBase = _realish(base);
+    const realFull = _realish(full);
+    return _within(base, full) || _within(realBase, realFull);
+  });
+  if (!ok) {
+    return { ok: false, error: '只能打开周报输出目录或绩效表目录内的位置' };
   }
   let stat;
   try { stat = fs.statSync(full); } catch (_) { return { ok: false, error: '路径不存在' }; }
@@ -261,7 +331,7 @@ function openInExplorer(target) {
     }
   }
   // explorer.exe 交接到已有 shell 后自己退出，退出码 1 属正常，不代表失败
-  return { ok: true, opened: full, selected: isFile, app: 'explorer', root: base };
+  return { ok: true, opened: full, selected: isFile, app: 'explorer' };
 }
 
 // ---------------------------------------------------------------- 注意事项
@@ -578,6 +648,11 @@ async function collectState() {
     key: { present: !!key, masked: maskKey(key) },
     python: { path: py, ok: deps.ok, version: deps.version },
     schedule,
+    perf: {
+      root: perfRoot(),
+      current: perfFileFor(new Date().getFullYear(), new Date().getMonth() + 1),
+      tables: listPerfTables(),
+    },
     checks: buildChecks(config, deps, schedule, key),
     notes: NOTES,
     reports: listReports(),
@@ -744,6 +819,33 @@ const server = http.createServer(async (req, res) => {
         '--notify-dry-run', '--no-miss-file'], { timeout: 180000 });
       invalidateState();
       json(res, 200, { ok: r.code === 0, code: r.code, out: r.out.slice(-4000) });
+      return;
+    }
+
+    // 绩效表：列出月度考核表
+    if (req.method === 'GET' && p === '/api/perf') {
+      const now = new Date();
+      const y = Number(url.searchParams.get('year')) || now.getFullYear();
+      const m = Number(url.searchParams.get('month')) || (now.getMonth() + 1);
+      json(res, 200, {
+        ok: true,
+        root: perfRoot(),
+        current: perfFileFor(y, m),
+        tables: listPerfTables(),
+      });
+      return;
+    }
+
+    // 绩效表：读取一张表的内容（面板里直接看，不用开 Excel）
+    if (req.method === 'GET' && p === '/api/perf/table') {
+      const target = String(url.searchParams.get('path') || '').trim();
+      if (!target) { json(res, 400, { ok: false, error: '缺少路径' }); return; }
+      const roots = [perfRoot()].filter(Boolean).map((d) => path.resolve(d));
+      const full = path.resolve(target);
+      const allowed = roots.some((base) => _within(base, full) || _within(_realish(base), _realish(full)));
+      if (!allowed) { json(res, 403, { ok: false, error: '只能读取绩效表目录内的文件' }); return; }
+      const r = await readPerfTable(full);
+      json(res, r.ok ? 200 : 500, r);
       return;
     }
 

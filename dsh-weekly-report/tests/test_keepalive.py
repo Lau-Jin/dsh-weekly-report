@@ -290,6 +290,64 @@ def main():
                   code == 200 and r.get("ok") is True and r.get("selected") is True, f"{code} {r}")
             close_explorer_windows()
 
+            # 绩效表：列表 / 读内容 / 打开目录（绩效表目录也算允许范围）
+            _ms, perf = get("/api/perf", timeout=30)
+            pj = json.loads(perf)
+            check("perf：接口返回 ok", pj.get("ok") is True, str(pj)[:120])
+            check("perf：给出绩效表根目录与当月表路径",
+                  bool(pj.get("root")) and bool(pj.get("current")), str(pj)[:200])
+            # 造一张测试用绩效表放进绩效表目录（结构与真表一致：第 7 行起是任务区）
+            import openpyxl
+            perf_root = os.path.join(tmp, "perf")
+            os.makedirs(os.path.join(perf_root, "2026"), exist_ok=True)
+            sample_perf = os.path.join(perf_root, "2026", "2026年11月测试员工月度考核表-交付中心.xlsx")
+            wbk = openpyxl.Workbook()
+            wsh = wbk.active
+            wsh.title = "月度考核"
+            wsh["B2"] = "员工月度考核表"
+            wsh["B3"], wsh["D3"] = "被考评人", "测试"
+            wsh["B4"], wsh["D4"] = "考评时间", "2026年11月1日-11月30日"
+            wsh["K3"] = __import__("datetime").datetime(2026, 11, 12, 10, 0, 0)
+            for rr in range(7, 22):
+                wsh.merge_cells(f"B{rr}:C{rr}")
+                wsh.merge_cells(f"D{rr}:I{rr}")
+                wsh.merge_cells(f"M{rr}:N{rr}")
+            wsh["B22"] = "工作任务考核（60%权重）"
+            wsh["B7"], wsh["D7"] = "项目运维", "示例学校某事项"
+            wsh["J7"] = __import__("datetime").datetime(2026, 11, 2)
+            wsh["K7"] = __import__("datetime").datetime(2026, 11, 3)
+            wsh["L7"] = "是"
+            wbk.save(sample_perf)
+            cfg["folder"] = perf_root
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            time.sleep(0.6)
+
+            _ms, body = get("/api/perf", timeout=30)
+            pj = json.loads(body)
+            names = [t2["name"] for t2 in pj.get("tables", [])]
+            check("perf：列出月度考核表", len(pj.get("tables") or []) > 0, str(len(pj.get("tables") or [])))
+            check("perf：列表里能看到刚造的表",
+                  any("2026年11月" in n for n in names), str(names[:3]))
+            code, r = post("/api/open-dir", {"path": perf_root})
+            check("open-dir：绩效表目录也允许打开", code == 200 and r.get("ok") is True, f"{code} {r}")
+            code, r = post("/api/open-dir", {"path": os.path.join(perf_root, "2026")})
+            check("open-dir：绩效表的年份子目录也允许打开", code == 200 and r.get("ok") is True, f"{code} {r}")
+            _ms, body = get("/api/perf/table?path=" + urllib.parse.quote(sample_perf), timeout=60)
+            rj = json.loads(body)
+            check("perf/table：能读出表内容",
+                  rj.get("ok") is True and (rj.get("table") or {}).get("total", 0) >= 1,
+                  str(rj)[:200])
+            code, body = 0, ""
+            try:
+                _ms, body = get("/api/perf/table?path=" + urllib.parse.quote("C:/Windows/win.ini"), timeout=30)
+            except Exception as e:
+                code = getattr(e, "code", 0)
+                body = str(e)
+            check("perf/table：绩效表目录外的文件被拒绝",
+                  code == 403 or "ok" not in (json.loads(body) if body.startswith("{") else {}),
+                  f"{code} {str(body)[:120]}")
+
             code, r = post("/api/open-dir", {"path": "C:/Windows"})
             check("open-dir：输出目录外被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
             code, r = post("/api/open-dir", {})

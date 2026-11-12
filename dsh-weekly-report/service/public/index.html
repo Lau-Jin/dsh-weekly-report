@@ -287,6 +287,31 @@
         </div>
       </div>
 
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">绩效表（本月月度考核表）</span>
+          <span class="wr-card__hint" id="perf-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div id="perf-current" class="wr-muted" style="font-size:12px;line-height:1.7">—</div>
+          <div class="wr-actions" style="margin-top:10px">
+            <button class="wr-btn" id="btn-perf-view">查看绩效表</button>
+            <button class="wr-btn wr-btn--ghost" id="btn-perf-open">打开所在目录</button>
+            <button class="wr-btn wr-btn--ghost" id="btn-perf-root">打开绩效表目录</button>
+            <button class="wr-btn" id="btn-perf-check2">核对本月绩效表</button>
+          </div>
+          <p class="wr-field__tip" style="margin:8px 0 0">
+            绩效表 = 本月全部周报内容的合集（同一事项一行，起止时间取并集，格式不变）。
+            「查看绩效表」直接在面板里看内容；「核对」会对照本月各周周报逐条比对，缺的自动补进表里。
+          </p>
+          <details id="perf-archive" style="margin-top:10px" hidden>
+            <summary class="wr-field__hint" style="cursor:pointer">往月的绩效表（点击展开）</summary>
+            <div id="perf-archive-list" style="margin-top:8px"></div>
+          </details>
+          <pre class="wr-pre" id="perf-view-out" hidden style="margin-top:10px;max-height:46vh"></pre>
+        </div>
+      </div>
+
       <div class="wr-actions" style="margin:14px 0">
         <button class="wr-btn wr-btn--primary wr-btn--lg" id="btn-run">开始生成</button>
         <button class="wr-btn" id="btn-cancel" disabled>终止</button>

@@ -240,6 +240,87 @@ function setDirty(v) {
   $('#dirty').hidden = !state.dirty;
 }
 
+/* ---------------------------------------------------------------- 渲染：绩效表 */
+function renderPerf(perf) {
+  const box = $('#perf-current');
+  const hint = $('#perf-hint');
+  if (!box) return;
+  const info = perf || {};
+  const tables = info.tables || [];
+  const current = info.current || '';
+  const cur = tables.find((t) => t.path === current);
+  if (!info.root) {
+    box.innerHTML = '<span class="wr-muted">未配置绩效表目录（配置页「绩效表目录」填一下）</span>';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  if (!current) {
+    box.innerHTML = '<span class="wr-muted">按当前配置找不到本月考核表路径</span>';
+    if (hint) hint.textContent = '';
+  } else if (cur) {
+    box.innerHTML = `<div class="wr-chips">
+        <span class="wr-chip wr-chip--ok">本月已存在</span>
+        <span class="wr-chip">${esc(cur.name)}</span>
+        <span class="wr-chip">${fmtSize(cur.size)}</span>
+        <span class="wr-chip">${esc(fmtTime(cur.mtime))}</span>
+      </div>
+      <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(cur.path)}</div>`;
+    if (hint) hint.textContent = '内容 = 本月全部周报';
+  } else {
+    box.innerHTML = `<div class="wr-chips">
+        <span class="wr-chip wr-chip--warn">本月还没生成</span>
+      </div>
+      <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(current)}</div>`;
+    if (hint) hint.textContent = '生成周报时会自动写入';
+  }
+
+  // 往月的表
+  const archive = $('#perf-archive');
+  const list = $('#perf-archive-list');
+  if (archive && list) {
+    const others = tables.filter((t) => t.path !== current);
+    archive.hidden = others.length === 0;
+    list.innerHTML = others.length ? others.map((t) => `
+      <div class="wr-rep" style="padding:6px 0;border-bottom:1px solid var(--line)">
+        <div style="min-width:0;flex:1 1 auto">
+          <div class="wr-rep__name" style="font-size:12px">${esc(t.name)}</div>
+          <div class="wr-rep__sub">${esc(t.dir || '.')} · ${fmtSize(t.size)} · ${esc(fmtTime(t.mtime))}</div>
+        </div>
+        <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">查看</button>
+        <button class="wr-btn wr-btn--ghost" data-perf-open="${esc(t.dirAbs || '')}">打开目录</button>
+      </div>`).join('') : '';
+  }
+}
+
+/** 绩效表内容预览（服务端读表，直接渲染成文本表格）。 */
+async function viewPerfTable(path, title) {
+  const pre = $('#perf-view-out');
+  if (!pre) return;
+  pre.hidden = false;
+  pre.textContent = '正在读取绩效表…';
+  try {
+    const r = await api('/api/perf/table?path=' + encodeURIComponent(path));
+    if (!r.ok) { pre.textContent = '读取失败：' + (r.error || '未知原因'); return; }
+    const t = r.table || {};
+    const lines = [];
+    lines.push(`${t.name || ''}`);
+    lines.push(`考核期间：${t.period || '—'}　处理人：${t.handler || '—'}`);
+    if (t.filled_at) lines.push(`填报时间：${String(t.filled_at).replace('T', ' ').slice(0, 19)}`);
+    lines.push(`共 ${t.total || 0} 条，已完成 ${t.done || 0} 条，未完成 ${t.undone || 0} 条`);
+    lines.push('');
+    lines.push('类别	事项	起止时间	是否完成');
+    for (const row of (t.rows || [])) {
+      const when = row.d1 === row.d2 ? row.d1 : `${row.d1} ~ ${row.d2}`;
+      lines.push(`${row.category || ''}	${row.content || ''}	${when || ''}	${row.settled ? '是' : '否'}`);
+    }
+    pre.textContent = lines.join('\n');
+    pre.scrollTop = 0;
+    if (title) toast(`已载入 ${t.name || '绩效表'}`, 'ok');
+  } catch (e) {
+    pre.textContent = '读取失败：' + e.message;
+  }
+}
+
 /* ---------------------------------------------------------------- 渲染：历史 */
 function renderReports(reports) {
   const box = $('#report-list');
@@ -400,6 +481,7 @@ function applyState(data) {
   renderLastRun(data.run);
   renderNotes(data.notes || []);
   renderReports(data.reports || []);
+  renderPerf(data.perf);
   fillConfig(data.config || {}, data.key);
   renderRun(data.run);
 }
@@ -696,6 +778,48 @@ function bindActions() {
       void openDir(dir, '周报输出目录');
     };
   }
+
+  // 绩效表：查看 / 打开目录 / 核对
+  $('#btn-perf-view').onclick = () => {
+    const cur = state.data && state.data.perf && state.data.perf.current;
+    if (!cur) { toast('找不到本月绩效表路径', 'err'); return; }
+    void viewPerfTable(cur, true);
+  };
+  $('#btn-perf-open').onclick = () => {
+    const cur = state.data && state.data.perf && state.data.perf.current;
+    if (!cur) { toast('找不到本月绩效表路径', 'err'); return; }
+    // 用所在目录（文件在年份子目录里）
+    const dir = cur.replace(/[\\/][^\\/]*$/, '');
+    void openDir(dir, '绩效表所在目录');
+  };
+  $('#btn-perf-root').onclick = () => {
+    const root = (state.data && state.data.perf && state.data.perf.root) || '';
+    if (!root) { toast('未配置绩效表目录', 'err'); return; }
+    void openDir(root, '绩效表目录');
+  };
+  $('#btn-perf-check2').onclick = async () => {
+    const btn = $('#btn-perf-check2');
+    btn.disabled = true;
+    const pre = $('#perf-view-out');
+    if (pre) { pre.hidden = false; pre.textContent = '正在核对本月绩效表…'; }
+    try {
+      const r = await post('/api/perf-check', {});
+      if (pre) pre.textContent = r.out || '(无输出)';
+      toast(r.ok ? '绩效表核对通过' : '绩效表核对有提示，看下面的报告', r.ok ? 'ok' : 'err');
+    } catch (e) {
+      if (pre) pre.textContent = '核对失败：' + e.message;
+      toast('核对失败', 'err');
+    } finally {
+      btn.disabled = false;
+      await refresh(true);
+    }
+  };
+  $('#perf-archive-list').addEventListener('click', (e) => {
+    const viewBtn = e.target.closest('[data-perf-view]');
+    if (viewBtn) { void viewPerfTable(viewBtn.dataset.perfView, true); return; }
+    const openBtn = e.target.closest('[data-perf-open]');
+    if (openBtn) { void openDir(openBtn.dataset.perfOpen, '绩效表所在目录'); }
+  });
 
   // 绩效表核对：对照本月各周周报，缺的事项自动补进当月表
   $('#btn-perf-check').onclick = async () => {
@@ -1009,7 +1133,7 @@ function runLayoutDiag() {
 
 // 测试用：?diag=1 时把几个渲染函数挂到 window，方便验证「没有路径就没有开关」这类边界
 if (new URLSearchParams(location.search).has('diag')) {
-  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, renderRun, pathShown, syncPathToggles };
+  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, renderRun, renderPerf, pathShown, syncPathToggles };
 }
 
 document.addEventListener('DOMContentLoaded', () => {

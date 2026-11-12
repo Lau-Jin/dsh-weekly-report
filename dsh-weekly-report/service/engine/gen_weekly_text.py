@@ -1612,6 +1612,40 @@ def perf_path_for(folder, handler, year, month):
                         f"{year}年{month}月{handler}员工月度考核表-交付中心.xlsx")
 
 
+def perf_dump(path):
+    """把绩效表读成可展示的结构（JSON 友好）：基本信息 + 任务区每一行。"""
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = perf_sheet(wb)
+    start, cap, sec_row = perf_task_zone(ws)
+    rows = read_perf_rows(ws, start, cap)
+    items = []
+    for r in rows:
+        d1, d2 = r.get("d1"), r.get("d2")
+        items.append({
+            "category": r.get("category") or "",
+            "content": r.get("content") or "",
+            "d1": d1.isoformat() if d1 else "",
+            "d2": d2.isoformat() if d2 else "",
+            "settled": bool(r.get("settled")),
+            "note": (r.get("note") or "") if isinstance(r.get("note"), str) else "",
+        })
+    done_n = sum(1 for it in items if it["settled"])
+    return {
+        "path": os.path.abspath(path),
+        "name": os.path.basename(path),
+        "sheet": ws.title,
+        "handler": str(ws.cell(3, 4).value or ""),
+        "period": str(ws.cell(4, 4).value or ""),
+        "filled_at": (ws.cell(3, 11).value.isoformat()
+                      if hasattr(ws.cell(3, 11).value, "isoformat") else ""),
+        "rows": items,
+        "total": len(items),
+        "done": done_n,
+        "undone": len(items) - done_n,
+    }
+
+
 def _shift_rows_down(ws, at_row, n):
     """在 at_row 处插入 n 行：整体下移单元格、样式、行高与合并区域。"""
     from copy import copy as _copy
@@ -3138,6 +3172,8 @@ def main():
                     help="按周期自动生成绩效文档到 输出目录\\绩效\\YYYY年MM月绩效_学校工单.xlsx")
     ap.add_argument("--perf-template", help="绩效文档模板（默认取当月的月度考核表）")
     ap.add_argument("--perf-month", help="绩效文档月份 YYYY-MM，默认取周期所在月")
+    ap.add_argument("--perf-dump", action="store_true",
+                    help="把绩效表读成 JSON 输出（面板「查看绩效表」用）")
     ap.add_argument("--perf-check", action="store_true",
                     help="核对当月绩效表：与本月各周周报逐条比对（内容/时间/完成标记/格式），"
                          "报告写在表旁边 *_核对.txt")
@@ -3188,6 +3224,21 @@ def main():
 
     if args.log:
         enable_log()
+
+    if args.perf_dump:
+        target = args.perf_xlsx
+        if not target:
+            if args.perf_month:
+                y0, m0 = [int(x) for x in args.perf_month.split("-")]
+            else:
+                today0 = _today_cn()
+                y0, m0 = today0.year, today0.month
+            target = perf_path_for(folder, handler, y0, m0)
+        if not os.path.isfile(target):
+            print(json.dumps({"error": "绩效表不存在", "path": target}, ensure_ascii=False))
+            sys.exit(2)
+        print(json.dumps(perf_dump(target), ensure_ascii=False, default=str))
+        return
 
     if args.perf_check:
         # 单独核对：不影响周报生成，也不需要周期参数

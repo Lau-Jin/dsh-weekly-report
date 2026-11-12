@@ -275,6 +275,35 @@ async function main() {
   check('有路径时：开关回来（定时任务 / 最近一次生成 / 路径卡）',
     noPath.scheduleWithPath && noPath.lastrunWithPath && noPath.pathsWithPath, JSON.stringify(noPath))
 
+  // 9.6 绩效表卡片（生成页）
+  await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"run\"]').click()")
+  await sleep(400)
+  const perfCard = await evaluate(client, `(() => {
+    const card = document.querySelector('#perf-current');
+    const cardBox = card && card.closest('.wr-card');
+    return {
+      hasCard: !!cardBox,
+      inRunPane: !!(cardBox && cardBox.closest('[data-pane="run"]')),
+      title: cardBox ? cardBox.querySelector('.wr-card__title').textContent.trim() : '',
+      view: !!document.querySelector('#btn-perf-view'),
+      open: !!document.querySelector('#btn-perf-open'),
+      root: !!document.querySelector('#btn-perf-root'),
+      check: !!document.querySelector('#btn-perf-check2'),
+      text: card ? card.textContent.trim().slice(0, 120) : '',
+      archiveItems: document.querySelectorAll('#perf-archive-list [data-perf-view]').length,
+    };
+  })()`)
+  check('生成页有「绩效表（本月月度考核表）」卡片',
+    perfCard.hasCard && perfCard.inRunPane && perfCard.title.includes('绩效表'), JSON.stringify(perfCard))
+  check('绩效表卡片有「查看绩效表」按钮', perfCard.view === true)
+  check('绩效表卡片有「打开所在目录」按钮', perfCard.open === true)
+  check('绩效表卡片有「打开绩效表目录」按钮', perfCard.root === true)
+  check('绩效表卡片有「核对本月绩效表」按钮', perfCard.check === true)
+  check('绩效表卡片显示本月表的状态', perfCard.text.length > 0, perfCard.text)
+  check('绩效表卡片列出往月表', perfCard.archiveItems > 0, String(perfCard.archiveItems))
+  await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"overview\"]').click()")
+  await sleep(200)
+
   // 9.65 日志区：自动滚动开关 + 跳到末尾
   const logCtl = await evaluate(client, `(() => {
     const pre = document.querySelector('#run-log');
