@@ -557,6 +557,35 @@ function setLogState(run) {
   text.textContent = run.exitCode === 0 ? '生成完成' : `已结束（退出码 ${run.exitCode}）`;
 }
 
+/** 结果模块里就地展开 / 收起某一条（周报看正文，绩效表看表格）。 */
+async function toggleResultView(btn, kind) {
+  const item = btn.closest('.wr-res__item');
+  const out = item && item.querySelector('.wr-res__view');
+  if (!out) return;
+  const open = out.hidden;
+  if (!open) {
+    out.hidden = true;
+    out.innerHTML = '';
+    btn.textContent = '查看';
+    return;
+  }
+  out.hidden = false;
+  btn.textContent = '收起';
+  out.innerHTML = '<div class="wr-muted">正在读取…</div>';
+  try {
+    if (kind === 'perf') {
+      const r = await api('/api/perf/table?path=' + encodeURIComponent(btn.dataset.resPerf));
+      if (!r.ok) { out.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(r.error || '未知原因')}</div>`; return; }
+      out.innerHTML = perfTableHtml(r.table || {});
+    } else {
+      const r = await api('/api/report?path=' + encodeURIComponent(btn.dataset.resView));
+      out.innerHTML = `<pre class="wr-pre wr-pre--perf">${esc(r.text || '(空)')}</pre>`;
+    }
+  } catch (e) {
+    out.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(e.message)}</div>`;
+  }
+}
+
 /** 生成结果：周报 / 绩效表 两个模块分别列出本次产物。 */
 function renderResult(run) {
   const card = $('#result-card');
@@ -574,8 +603,9 @@ function renderResult(run) {
         <div class="wr-res__name">${esc(a.name)}</div>
         <div class="wr-res__sub">${esc(a.start)} ~ ${esc(a.end)} · ${a.count} 条</div>
       </div>
-      <button class="wr-btn wr-btn--ghost" data-view="${esc(a.path)}">查看</button>
+      <button class="wr-btn wr-btn--ghost" data-res-view="${esc(a.path)}">查看</button>
       <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
+      <div class="wr-res__view" hidden></div>
     </div>`).join('') : '<div class="wr-muted">本次没有生成周报</div>';
 
   const perfBox = $('#result-perf');
@@ -585,8 +615,9 @@ function renderResult(run) {
         <div class="wr-res__name">${esc(a.name)}</div>
         <div class="wr-res__sub">${a.year}年${a.month}月 · ${a.count} 条</div>
       </div>
-      <button class="wr-btn wr-btn--ghost" data-perf-view2="${esc(a.path)}">查看</button>
+      <button class="wr-btn wr-btn--ghost" data-res-perf="${esc(a.path)}">查看</button>
       <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
+      <div class="wr-res__view" hidden></div>
     </div>`).join('') : '<div class="wr-muted">本次没有写绩效表（可看「模板自检」：目录里可能还没有模板）</div>';
 
   const hint = $('#result-hint');
@@ -877,6 +908,7 @@ function bindActions() {
       perfAuto: $('#opt-perf').checked,
       dryRun: $('#opt-dry').checked,
       noTasks: $('#opt-notasks').checked,
+      noCache: $('#opt-nocache').checked,
     };
     if (body.period === 'range') {
       body.start = $('#start').value;
@@ -969,6 +1001,14 @@ function bindActions() {
     btn.textContent = '收起绩效表';
     void viewPerfTable(cur, out);
   };
+  // 「模板自检」的结果也放这块，收起时一起收掉
+  $('#btn-perf-tpl').addEventListener('click', () => {
+    const out = $('#perf-view-out');
+    if (out) { out.hidden = false; }
+    perfViewOpen = true;
+    const btn = $('#btn-perf-view');
+    if (btn) btn.textContent = '收起绩效表';
+  });
   $('#btn-perf-open').onclick = () => {
     const cur = state.data && state.data.perf && state.data.perf.current;
     if (!cur) { toast('找不到本月绩效表路径', 'err'); return; }
@@ -1048,10 +1088,10 @@ function bindActions() {
   };
 
   $('#result-card').addEventListener('click', (e) => {
-    const viewBtn = e.target.closest('[data-view]');
-    if (viewBtn) { void openReport(viewBtn.dataset.view); return; }
-    const perfBtn = e.target.closest('[data-perf-view2]');
-    if (perfBtn) { void viewPerfTable(perfBtn.dataset.perfView2, '#perf-view-out'); return; }
+    const repBtn = e.target.closest('[data-res-view]');
+    if (repBtn) { void toggleResultView(repBtn, 'report'); return; }
+    const perfBtn = e.target.closest('[data-res-perf]');
+    if (perfBtn) { void toggleResultView(perfBtn, 'perf'); return; }
     const dirBtn = e.target.closest('[data-open-dir]');
     if (dirBtn) {
       const p = dirBtn.dataset.openDir || '';

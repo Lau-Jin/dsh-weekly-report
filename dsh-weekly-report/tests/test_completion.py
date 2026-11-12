@@ -214,6 +214,50 @@ def main():
     check("多条目各出一块", out2.count("· ") == 2, out2[:120])
     check("模板里没有的字段不影响渲染", "{" not in g.render_report([one], "只有 {{subject}}"))
 
+    # ---- 分周完成判定与周报「记录完成」口径一致 ----
+    print("分周完成判定：")
+    from datetime import date as _d2
+    _mk = g.week_marks([
+        {"work_date": "2026-11-03", "remark": "还在做", "progress": 40},
+        {"work_date": "2026-11-04", "remark": "已完成", "progress": 100},
+        {"work_date": "2026-11-12", "remark": "", "progress": 100},
+    ])
+    check("week_marks：按自然周分组", "2026-11-02" in _mk and "2026-11-09" in _mk, str(list(_mk)))
+    check("week_marks：备注写完成的那周 done=True",
+          _mk.get("2026-11-02", {}).get("done") is True, str(_mk.get("2026-11-02")))
+    check("week_marks：没写完成的那周 done=False",
+          _mk.get("2026-11-09", {}).get("done") is False, str(_mk.get("2026-11-09")))
+    check("week_marks：每周进度取该周工时最大值",
+          _mk.get("2026-11-02", {}).get("progress") == 100, str(_mk.get("2026-11-02")))
+    check("week_marks：否定备注不算完成",
+          g.week_marks([{"work_date": "2026-11-03", "remark": "未完成，继续"}]).get(
+              "2026-11-02", {}).get("done") is False)
+    check("week_marks：否定词优先于完成词",
+          g.week_marks([{"work_date": "2026-11-03", "remark": "已完成但未完成"}]).get(
+              "2026-11-02", {}).get("done") is False)
+
+    # ---- 绩效表合并：同一工单以 100% 那条为准 ----
+    print("绩效表合并：")
+    _row = {"category": "项目运维", "content": "某学院某事项", "d1": _d2(2026, 11, 3),
+             "d2": _d2(2026, 11, 4), "settled": False, "note": ""}
+    _row100 = dict(_row, d1=_d2(2026, 11, 10), d2=_d2(2026, 11, 12), settled=True)
+    _merged = g.merge_perf_rows([_row], [_row100])
+    check("重复工单合并成一条", len(_merged) == 1, str(len(_merged)))
+    check("合并后以 100% 那条为准（完成=是）", _merged[0]["settled"] is True, str(_merged[0]))
+    check("合并后时间取并集",
+          _merged[0]["d1"] == _d2(2026, 11, 3) and _merged[0]["d2"] == _d2(2026, 11, 12), str(_merged[0]))
+
+    # ---- 本地缓存 ----
+    print("本地缓存：")
+    import tempfile as _tf
+    _cache_dir = os.path.join(_tf.mkdtemp(prefix="wr_cache_"), "cache")
+    _orig_dir = g._cache_dir
+    g._cache_dir = lambda: _cache_dir
+    g.cache_write("probe", [{"x": 1}])
+    check("缓存写入后可读回", g.cache_read("probe") == [{"x": 1}])
+    check("缓存缺失时返回 None", g.cache_read("not_exist_probe") is None)
+    g._cache_dir = _orig_dir
+
     print("")
     print(f"通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")
     for f2 in FAILED:

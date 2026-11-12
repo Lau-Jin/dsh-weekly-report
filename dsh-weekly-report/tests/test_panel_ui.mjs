@@ -301,6 +301,19 @@ async function main() {
   check('「上个月」按钮名称贴切', periodUi.segs.some((s) => s.period === 'lastMonth' && s.text === '上个月'))
   check('周期说明有文字（说清这趟生成什么）', periodUi.tip.length > 8, periodUi.tip)
 
+  // 9.55 结果模块：周报/绩效表各自就地展开，且能收起
+  const resUi = await evaluate(client, `(() => {
+    const card = document.querySelector('#result-card');
+    return {
+      exists: !!card,
+      hidden: card ? card.hidden : true,
+      hasReports: !!document.querySelector('#result-reports'),
+      hasPerf: !!document.querySelector('#result-perf'),
+    };
+  })()`)
+  check('结果模块（周报 / 绩效表两个块）存在',
+    resUi.hasReports && resUi.hasPerf, JSON.stringify(resUi))
+
   // 9.6 绩效表卡片（生成页）
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"run\"]').click()")
   await sleep(400)

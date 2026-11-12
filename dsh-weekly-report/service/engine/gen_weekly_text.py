@@ -520,8 +520,66 @@ def pick_ticket_tool(tools):
     return scored[0][1]
 
 
+# ---------------------------------------------------------------- 本地缓存
+# 工单列表（500+ 条 / 26 页）与任务列表（600+ 条 / 56 页）一次拉完要 30~90 秒，
+# 而它们的变化很慢。这里把原始列表缓存在磁盘上，TTL 内复用；--no-cache 可强制刷新。
+# 缓存放数据目录（插件目录可能是只读的，也别把缓存混进代码目录）
+def _cache_dir():
+    try:
+        from pathlib import Path
+        env = os.environ.get("WEEKLY_PANEL_DATA")
+        if env:
+            return str(Path(env) / "cache")
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+
+
+CACHE_TTL_SECONDS = 6 * 3600     # 6 小时
+
+
+def _cache_path(name):
+    return os.path.join(_cache_dir(), name + ".json")
+
+
+def cache_read(name, ttl=CACHE_TTL_SECONDS):
+    path = _cache_path(name)
+    try:
+        if not os.path.isfile(path):
+            return None
+        if ttl is not None and (time.time() - os.path.getmtime(path)) > ttl:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("items")
+    except Exception:
+        return None
+
+
+def cache_write(name, items):
+    try:
+        os.makedirs(_cache_dir(), exist_ok=True)
+        tmp = _cache_path(name) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "items": items}, f, ensure_ascii=False)
+        os.replace(tmp, _cache_path(name))
+    except Exception:
+        pass
+
+
 def fetch_tickets_via_mcp(token, url=DEFAULT_MCP_URL, tool_name=None,
-                          tool_args=None, handler_filter=None):
+                          tool_args=None, handler_filter=None, use_cache=True):
+    cached = cache_read("tickets") if use_cache else None
+    if cached:
+        print(f"工单列表：命中本地缓存（{len(cached)} 条，"
+              f"{int(time.time() - os.path.getmtime(_cache_path('tickets')))} 秒前拉的）")
+        tickets = normalize_tickets(cached)
+        if handler_filter:
+            mine = sum(1 for t2 in tickets if handler_filter in t2["handler"])
+            print(f"工单共 {len(tickets)} 条，其中处理人含「{handler_filter}」{mine} 条"
+                  f"（匹配时本人优先，未命中再比对全部）")
+        return tickets, []
+
     client = McpClient(url, token)
     init = client.initialize()
     err = mcp_error(init)
@@ -582,6 +640,8 @@ def fetch_tickets_via_mcp(token, url=DEFAULT_MCP_URL, tool_name=None,
             break
         page += 1
 
+    if use_cache:
+        cache_write("tickets", all_items)
     tickets = normalize_tickets(all_items)
     if handler_filter:
         mine = sum(1 for t in tickets if handler_filter in t["handler"])
@@ -649,8 +709,15 @@ def is_cancelled_status(status):
 
 
 def fetch_my_worklogs(token, url=DEFAULT_MCP_URL, start=None, end=None,
-                      tool="task_list_my_worklogs"):
+                      tool="task_list_my_worklogs", use_cache=True):
     """取我在指定日期区间的工时记录（含 task_id / 工作日期 / 工时 / 进度）。"""
+    ckey = f"worklogs_{start}_{end}" if (start and end) else ""
+    if use_cache and ckey:
+        hit = cache_read(ckey, ttl=600)        # 工时 10 分钟内复用
+        if hit is not None:
+            print(f"我的工时：命中本地缓存（{len(hit)} 条）")
+            return hit
+
     client = McpClient(url, token)
     init = client.initialize()
     err = mcp_error(init)
@@ -674,6 +741,8 @@ def fetch_my_worklogs(token, url=DEFAULT_MCP_URL, start=None, end=None,
         page += 1
     print(f"我的工时：{len(out)} 条（{start} ~ {end}，合计 "
           f"{sum(float(w.get('hours') or 0) for w in out):g} 小时）")
+    if use_cache and ckey:
+        cache_write(ckey, out)
     return out
 
 
@@ -690,30 +759,45 @@ def _today_cn():
     return datetime.now(timezone(timedelta(hours=8))).date()
 
 
-def fetch_workdays(token, url=DEFAULT_MCP_URL, start=None, end=None):
-    """周期内每个日期是否工作日（calendar_is_workday）；读取失败时返回空。"""
+def fetch_workdays(token, url=DEFAULT_MCP_URL, start=None, end=None, use_cache=True):
+    """周期内每个日期是否工作日（calendar_is_workday）；读取失败时返回空。
+
+    工作日一年也变不了几次，按日期缓存（TTL 12 小时），不必每次生成都逐天问一遍。
+    """
     if not start or not end:
         return {}
     out = {}
+    todo = []
+    d = start
+    while d <= end:
+        key = d.isoformat()
+        hit = cache_read(f"workday_{key}") if use_cache else None
+        if hit is not None:
+            out[d] = bool(hit)
+        else:
+            todo.append(d)
+        d += timedelta(days=1)
+    if not todo:
+        return out
     try:
         client = McpClient(url, token)
         init = client.initialize()
         if mcp_error(init):
-            return {}
-        d = start
-        while d <= end:
+            return out
+        for d in todo:
             key = d.isoformat()
             if key in _WORKDAY_CACHE:
                 out[d] = _WORKDAY_CACHE[key]
-            else:
-                resp = call_with_retry(client, "calendar_is_workday", {"date": key})
-                if mcp_error(resp):
-                    break
-                data = json.loads(tool_texts(resp))
-                flag = bool(data.get("is_workday"))
-                _WORKDAY_CACHE[key] = flag
-                out[d] = flag
-            d += timedelta(days=1)
+                continue
+            resp = call_with_retry(client, "calendar_is_workday", {"date": key})
+            if mcp_error(resp):
+                break
+            data = json.loads(tool_texts(resp))
+            flag = bool(data.get("is_workday"))
+            _WORKDAY_CACHE[key] = flag
+            out[d] = flag
+            if use_cache:
+                cache_write(f"workday_{key}", flag)
     except SystemExit:
         pass
     except Exception:
@@ -722,6 +806,42 @@ def fetch_workdays(token, url=DEFAULT_MCP_URL, start=None, end=None):
         days = [k for k in sorted(out) if out[k]]
         print(f"本周期工作日：{len(days)} 天"
               f"（{('、'.join(d.isoformat()[5:] for d in days)) or '-'}）")
+    return out
+
+
+def week_marks(all_wls):
+    """把某条事项的全部工时按自然周（周一~周日）分组，算出每周的完成标记与进度。
+
+    完成判定与周报里「记录完成」的口径一致：
+      · 该周最后一条工时备注标记完成（remark_done）→ 这周算完成
+      · 工单/任务在平台上已收口，且完成日落在这一周 → 这周算完成
+    返回 {该周周一 iso: {"done": bool, "progress": int|None, "remark": str}}
+    """
+    groups = {}
+    for w in all_wls or []:
+        d = to_date(w.get("work_date"))
+        if d is None:
+            continue
+        monday = d - timedelta(days=d.weekday())
+        key = monday.isoformat()
+        g = groups.setdefault(key, {"dates": [], "progress": None, "last_remark": "", "last_date": None})
+        g["dates"].append(d)
+        p = w.get("progress")
+        if isinstance(p, (int, float)) and p:
+            g["progress"] = max(g["progress"] or 0, int(p))
+        # 同一周里以最后一条工时的备注为准
+        if g["last_date"] is None or d >= g["last_date"]:
+            g["last_date"] = d
+            g["last_remark"] = str(w.get("remark") or "")
+    out = {}
+    for key, g in groups.items():
+        out[key] = {
+            "done": remark_done(g["last_remark"]),
+            "progress": g["progress"],
+            "remark": g["last_remark"],
+            "first": min(g["dates"]).isoformat(),
+            "last": max(g["dates"]).isoformat(),
+        }
     return out
 
 
@@ -929,6 +1049,9 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
             "done": completed_in_period,
             # 工时落在哪些天（分周归属用：一条只属于它真正干过活的那些周）
             "work_dates": [d.isoformat() for d in p_dates],
+            "week_marks": week_marks(all_wls),
+            "completion": completion.isoformat() if completion else "",
+            "settled_platform": bool(settled),
             "created": created.isoformat() if created else "",
         })
 
@@ -941,8 +1064,19 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
 # --------------------------------------------------------------------------
 # 任务中心：我负责的任务 / 我有工时记录的任务
 # --------------------------------------------------------------------------
-def fetch_my_tasks(token, url=DEFAULT_MCP_URL, tool=TASK_LIST_TOOL, limit=25):
-    """任务中心里与我相关的任务（作为负责人或参与人），分页拉全。"""
+def fetch_my_tasks(token, url=DEFAULT_MCP_URL, tool=TASK_LIST_TOOL, limit=25,
+                   use_cache=True):
+    """任务中心里与我相关的任务（作为负责人或参与人），分页拉全。
+
+    任务列表 600+ 条、每页只能 12 条（64KB 预算），全量要 90 秒 —— 但列表变化很慢，
+    默认缓存在磁盘上（TTL 6 小时），重复生成/重跑几乎不花时间。
+    """
+    cached = cache_read("tasks") if use_cache else None
+    if cached:
+        owner = sum(1 for x in cached if str(x.get("is_owner")) == "1")
+        print(f"任务中心：命中本地缓存（{len(cached)} 条，我负责 {owner} 条）")
+        return cached
+
     client = McpClient(url, token)
     init = client.initialize()
     err = mcp_error(init)
@@ -967,17 +1101,27 @@ def fetch_my_tasks(token, url=DEFAULT_MCP_URL, tool=TASK_LIST_TOOL, limit=25):
         if not items or (isinstance(total, int) and len(out) >= total) or len(items) < limit:
             break
         page += 1
+    if use_cache:
+        cache_write("tasks", out)
     owner = sum(1 for t in out if str(t.get("is_owner")) == "1")
     print(f"任务中心：{len(out)} 条（我负责 {owner} 条）")
     return out
 
 
-def fetch_task_details(token, task_ids, url=DEFAULT_MCP_URL):
-    """补拉不在「我的任务」列表里的任务详情（多为只记过工时、负责人是别人）。"""
+def fetch_task_details(token, task_ids, url=DEFAULT_MCP_URL, use_cache=True):
+    """补拉不在「我的任务」列表里的任务详情（多为只记过工时、负责人是别人）。
+
+    详情接口约 1.8 秒/个，这里按任务 id 缓存起来（TTL 内复用）。
+    """
     out = {}
     ids = [int(x) for x in task_ids if str(x).isdigit()]
     if not ids:
         return out
+    if use_cache:
+        for tid in ids:
+            hit = cache_read(f"task_{tid}")
+            if hit is not None:
+                out[str(tid)] = hit
     client = McpClient(url, token)
     init = client.initialize()
     err = mcp_error(init)
@@ -985,12 +1129,17 @@ def fetch_task_details(token, task_ids, url=DEFAULT_MCP_URL):
         print(f"提示：任务详情读取失败（{err}），这些任务不单独生成")
         return out
     for tid in ids:
+        if str(tid) in out:
+            continue
         resp = call_with_retry(client, TASK_DETAIL_TOOL,
                                 {"taskId": tid, "logLimit": 1, "worklogLimit": 1})
         if mcp_error(resp):
             continue
         try:
-            out[str(tid)] = json.loads(tool_texts(resp))
+            data = json.loads(tool_texts(resp))
+            out[str(tid)] = data
+            if use_cache:
+                cache_write(f"task_{tid}", data)
         except json.JSONDecodeError:
             continue
     print(f"任务详情：补拉 {len(out)}/{len(ids)} 条")
@@ -1085,15 +1234,20 @@ def fetch_subtask_tasks(token, mcp_url, parents, my_ids, known_ids, limit=80):
         pid = parent.get("id") or parent.get("taskId")
         if pid is None:
             continue
-        resp = call_with_retry(client, TASK_DETAIL_TOOL,
-                                {"taskId": pid, "logLimit": 1, "worklogLimit": 1})
-        used += 1
-        if mcp_error(resp):
-            continue
-        try:
-            pdet = json.loads(tool_texts(resp))
-        except json.JSONDecodeError:
-            continue
+        pdet = cache_read(f"task_{pid}")
+        if pdet is None:
+            resp = call_with_retry(client, TASK_DETAIL_TOOL,
+                                    {"taskId": pid, "logLimit": 1, "worklogLimit": 1})
+            used += 1
+            if mcp_error(resp):
+                continue
+            try:
+                pdet = json.loads(tool_texts(resp))
+            except json.JSONDecodeError:
+                continue
+            cache_write(f"task_{pid}", pdet)
+        else:
+            used += 1
 
         for child in (pdet.get("children") or []):
             if used >= limit:
@@ -1101,15 +1255,18 @@ def fetch_subtask_tasks(token, mcp_url, parents, my_ids, known_ids, limit=80):
             cid = child.get("id")
             if cid is None or str(cid) in existing:
                 continue
-            cresp = call_with_retry(client, TASK_DETAIL_TOOL,
-                                     {"taskId": cid, "logLimit": 1, "worklogLimit": 1})
-            used += 1
-            if mcp_error(cresp):
-                continue
-            try:
-                cdet = json.loads(tool_texts(cresp))
-            except json.JSONDecodeError:
-                continue
+            cdet = cache_read(f"task_{cid}")
+            if cdet is None:
+                cresp = call_with_retry(client, TASK_DETAIL_TOOL,
+                                         {"taskId": cid, "logLimit": 1, "worklogLimit": 1})
+                used += 1
+                if mcp_error(cresp):
+                    continue
+                try:
+                    cdet = json.loads(tool_texts(cresp))
+                except json.JSONDecodeError:
+                    continue
+                cache_write(f"task_{cid}", cdet)
             item = detail_to_task(cdet, parent)
             if not item:
                 continue
@@ -1463,6 +1620,9 @@ def build_items_from_tasks(tasks, worklogs, handler, ws, we,
             "settled": completed_in_period,
             "done": completed_in_period,
             "work_dates": [d.isoformat() for d in p_dates],
+            "week_marks": week_marks(all_wls),
+            "completion": completion.isoformat() if completion else "",
+            "settled_platform": bool(done),
             "created": created.isoformat() if created else "",
         })
 
@@ -1487,24 +1647,33 @@ def merge_items(*groups):
 
 
 def collect_items(token, mcp_url, handler, ws, we, mcp_tool=None, mcp_args=None,
-                  with_tasks=True):
+                  with_tasks=True, use_cache=True):
     """周报条目总入口：工单（处理人/本周期工时/关联任务我负责）＋ 任务中心（本周期工时/本周期新建我负责）。
 
     工时按「周期前 60 天 ~ 今天」拉取：既知道本周期记了哪些，也能判断周期之后是否还有
     工时（有 → 说明该周期还没做完）。
     """
+    _t0 = time.time()
     tickets, _ = fetch_tickets_via_mcp(token, mcp_url, mcp_tool, mcp_args,
-                                       handler_filter=handler)
+                                       handler_filter=handler, use_cache=use_cache)
+    _t1 = time.time()
     wl_start = ws - timedelta(days=60)
     wl_end = max(we, _today_cn())
     worklogs = fetch_my_worklogs(token, mcp_url, wl_start, wl_end)
+    _t2 = time.time()
+    # 工作日只查周报周期需要的那几天（整月跨度是给绩效表采集用的，不必逐天查）
     workdays = fetch_workdays(token, mcp_url, ws, we)
+    _t3 = time.time()
+    print(f"[计时] 工单 {_t1-_t0:.1f}s · 工时 {_t2-_t1:.1f}s · 工作日 {_t3-_t2:.1f}s")
 
     my_task_ids, task_items = set(), []
     supp_task_ids = set()
     if with_tasks:
         try:
-            tasks = fetch_my_tasks(token, mcp_url)
+            _t4 = time.time()
+            tasks = fetch_my_tasks(token, mcp_url, use_cache=use_cache)
+            _t5 = time.time()
+            print(f"[计时] 任务列表 {_t5-_t4:.1f}s")
             my_task_ids = {str(t.get("id")) for t in tasks
                            if str(t.get("is_owner")) == "1"}
             # 工单本身没有子任务字段，子任务挂在它关联的任务上；先备好映射给工单用
@@ -1520,7 +1689,10 @@ def collect_items(token, mcp_url, handler, ws, we, mcp_tool=None, mcp_args=None,
                            if w.get("task_id") is not None}
             known = {str(t.get("id")) for t in tasks}
             missing = sorted(wl_task_ids - known)
+            _t6 = time.time()
             details = fetch_task_details(token, mcp_url, missing) if missing else {}
+            _t7 = time.time()
+            print(f"[计时] 补拉任务详情 {_t7-_t6:.1f}s（{len(missing)} 个）")
 
             # 子任务补录：列表接口不返回子任务，只有「本期已纳入的父任务」才去取 children
             # （如工单 505 关联任务 1765 的两个子任务 1769/1770，本周期新建、负责人是我）
@@ -1540,8 +1712,10 @@ def collect_items(token, mcp_url, handler, ws, we, mcp_tool=None, mcp_args=None,
                     continue
                 if p_dates or (str(t.get("is_owner")) == "1" and created_in_period) or done_period:
                     parents_to_expand.append(t)
+            _t8 = time.time()
             subtasks = fetch_subtask_tasks(token, mcp_url, parents_to_expand,
                                            my_user_ids(tasks), known_all)
+            print(f"[计时] 子任务补录 {time.time()-_t8:.1f}s（{len(subtasks)} 条）")
             if subtasks:
                 tasks = list(tasks) + subtasks
                 my_task_ids |= {str(t.get("id")) for t in subtasks
@@ -1853,6 +2027,7 @@ def merge_perf_rows(*groups):
             d2s = [d for d in (cur.get("d2"), row.get("d2")) if d]
             cur["d1"] = min(d1s) if d1s else None
             cur["d2"] = max(d2s) if d2s else None
+            # 完成度：同一工单在多周周报里重复出现时，**以完成度 100% 的那条为准**
             cur["settled"] = bool(cur.get("settled")) or bool(row.get("settled"))
             if not cur.get("category"):
                 cur["category"] = (row.get("category") or "").strip()
@@ -3332,6 +3507,8 @@ def main():
     ap.add_argument("--log", action="store_true", help="同时写运行日志到 <输出目录>\\logs\\run.log")
     ap.add_argument("--source", choices=["tickets", "appraisal"], default="tickets",
                     help="tickets=按工单+任务中心生成（处理人/工时/我负责的任务）；appraisal=按绩效表生成")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="不用本地缓存，重新拉工单/任务列表（慢一些，但数据最新）")
     ap.add_argument("--no-tasks", action="store_true",
                     help="只按工单生成，不读取任务中心（我负责的任务 / 我有工时记录的任务）")
     ap.add_argument("--perf-xlsx", help="同时生成绩效文档（xlsx），值为输出路径")
@@ -3574,12 +3751,20 @@ def main():
         artifacts = {"reports": [], "perf": [], "weeks": []}
         perf_months = {}
 
-        # 一次采集覆盖整个区间，再按周拆分——多周时不用反复调接口
+        # 一次采集覆盖「区间 + 涉及的整月」，再按周拆分：
+        #   · 区间内每周各出一份周报
+        #   · 涉及的每个月直接用同一批数据写绩效表（不用再采一次）
         span_start = min(p[0] for p in periods)
         span_end = max(p[1] for p in periods)
+        touched_months = {(p[0].year, p[0].month) for p in periods}
+        touched_months |= {(p[1].year, p[1].month) for p in periods}
+        for (my_, mm_) in touched_months:
+            span_start = min(span_start, date(my_, mm_, 1))
+            span_end = max(span_end, month_range(my_, mm_)[1])
         all_items = collect_items(token, mcp_url, handler, span_start, span_end,
                                   mcp_tool=args.mcp_tool, mcp_args=data_args,
-                                  with_tasks=not args.no_tasks)
+                                  with_tasks=not args.no_tasks,
+                                  use_cache=not args.no_cache)
         print(f"已采集 {span_start} ~ {span_end}：{len(all_items)} 条")
 
         def _d(v):
@@ -3611,12 +3796,21 @@ def main():
                 copy["d1"] = w1.isoformat()
                 copy["d2"] = w2.isoformat()
                 copy["time"] = fmt_range(w1, w2)
-                # 这一周之后还有没有工时？没有 → 这一周就是它收口的那周（算完成）
-                later = [x for x in dates if x > week_end]
-                copy["settled"] = (not later) and bool(it.get("work_dates"))
+
+                # 完成判定：**与周报「记录完成」的口径一致**
+                #   ① 该周工时备注标记完成
+                #   ② 平台已收口（状态完成/已评分…或任务完成时间）且完成日落在这一周
+                marks = (it.get("week_marks") or {}).get(week_start.isoformat()) or {}
+                done_by_remark = bool(marks.get("done"))
+                comp = it.get("completion") or ""
+                done_by_platform = (bool(it.get("settled_platform"))
+                                    and bool(comp) and week_start.isoformat() <= comp <= week_end.isoformat())
+                copy["settled"] = bool(done_by_remark or done_by_platform)
                 copy["done"] = copy["settled"]
                 if copy["settled"]:
                     copy["progress"] = "100%"
+                elif marks.get("progress"):
+                    copy["progress"] = f"{int(marks['progress'])}%"
                 out.append(copy)
             out.sort(key=lambda x: (x.get("d1") or "", x.get("school") or "", x.get("subject") or ""))
             return out
@@ -3662,16 +3856,26 @@ def main():
                 m_items = []
                 for (ws, we, its) in segs:
                     m_items.extend(its)
-                # 该月若不在采集区间内（例如只生成本月但要写上月表），补一次
+                # 采集区间已经覆盖整月（span 扩到了整月）→ 直接用同一批数据，不重复采集
                 covered = ms >= span_start and me <= span_end
                 if not covered:
                     extra = collect_items(token, mcp_url, handler, ms, me,
                                          mcp_tool=args.mcp_tool, mcp_args=data_args,
-                                         with_tasks=not args.no_tasks)
+                                         with_tasks=not args.no_tasks,
+                                         use_cache=not args.no_cache)
                     have = {(i.get("school"), i.get("subject")) for i in m_items}
                     for i in extra:
                         if (i.get("school"), i.get("subject")) not in have:
                             m_items.append(i)
+                else:
+                    # 补上「本月但不在本次各周区间内」的条目（区间已覆盖整月，数据都在 all_items 里）
+                    for it in all_items:
+                        a = _d(it.get("d1"))
+                        if a is None or not (ms <= a <= me):
+                            continue
+                        if (it.get("school"), it.get("subject")) not in {
+                                (x.get("school"), x.get("subject")) for x in m_items}:
+                            m_items.append(it)
                 full_month = not covered
 
                 if args.perf_template:
@@ -3719,17 +3923,34 @@ def main():
                     else (first["start"] if first else "-"))
             summary = f"{span}：共 {len(artifacts['reports'])} 份周报 / {total} 条事项"
             subject = f"【周报】{span}（{total} 条 / {len(artifacts['reports'])} 份）"
+            # 正文：每份周报都带上完整内容（原来只给了文件路径，邮箱里看不到周报）
             body_lines = [f"周期：{span}", summary, ""]
+            report_texts = []
             for a in artifacts["reports"]:
-                body_lines.append(f"周报 {a['start']}~{a['end']}：{a['count']} 条  {a['path']}")
+                txt = ""
+                try:
+                    with open(a["path"], "r", encoding="utf-8") as f:
+                        txt = f.read()
+                except Exception as e:
+                    txt = f"（读取失败：{e}）"
+                report_texts.append(txt)
+                body_lines += [
+                    "=" * 56,
+                    f"周报 {a['start']} ~ {a['end']}（{a['count']} 条）",
+                    "=" * 56,
+                    txt.rstrip(),
+                    "",
+                ]
+            perf_lines = []
             if artifacts["perf"]:
-                body_lines.append("")
+                perf_lines.append("绩效表：")
                 for a in artifacts["perf"]:
-                    body_lines.append(f"绩效表 {a['year']}年{a['month']}月：{a['count']} 条  {a['path']}")
+                    perf_lines.append(f"  {a['year']}年{a['month']}月：{a['count']} 条  {a['path']}")
+                body_lines += ["", *perf_lines]
             body = "\n".join(body_lines)
-            html = build_mail_html(span, summary, "\n".join(
-                [f"{a['start']}~{a['end']}：{a['count']} 条" for a in artifacts["reports"]]),
-                "\n".join([f"{a['year']}年{a['month']}月绩效表 {a['count']} 条" for a in artifacts["perf"]]))
+            html = build_mail_html(span, summary,
+                                  "\n\n".join(report_texts),
+                                  "\n".join(perf_lines))
             webhook_body = "\n".join([summary] +
                 [f"周报：{a['path']}" for a in artifacts["reports"]] +
                 [f"绩效表：{a['path']}" for a in artifacts["perf"]])

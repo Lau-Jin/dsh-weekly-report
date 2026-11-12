@@ -438,6 +438,7 @@ function resolvePeriod(body) {
   }
   if (body.perfAuto) args.push('--perf-auto');
   if (body.noTasks) args.push('--no-tasks');
+  if (body.noCache) args.push('--no-cache');   // 不走本地缓存，重新拉工单/任务列表
   args.push(body.dryRun ? '--notify-dry-run' : '--log');
   return args;
 }
