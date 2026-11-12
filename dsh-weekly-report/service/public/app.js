@@ -246,24 +246,30 @@ function renderReports(reports) {
   const q = state.reportQuery.trim().toLowerCase();
   const list = q ? reports.filter((r) => r.name.toLowerCase().includes(q)) : reports;
   $('#report-hint').textContent = `${list.length} / ${reports.length} 份`;
-  const hasDir = list.some((r) => r && (r.dirAbs || r.dir));
+  // 「打开周报目录」：只要输出目录本身能开就显示（哪怕所有周报都在根目录、没有子目录）
   const openRoot = $('#btn-open-outdir');
-  if (openRoot) openRoot.hidden = !hasDir;
+  if (openRoot) openRoot.hidden = !reports.length;
   if (!list.length) {
     box.innerHTML = `<div class="wr-empty">${reports.length ? '没有匹配的文件' : '还没生成过周报'}</div>`;
     return;
   }
-  box.innerHTML = list.map((r, i) => `
+  box.innerHTML = list.map((r, i) => {
+    // 文件直接躺在输出根目录时，行内按钮没意义（跟「打开周报目录」是同一个地方）
+    const dirLabel = r.inRoot ? '输出目录' : esc(r.dir || '');
+    const dirBtn = r.inRoot ? '' : `
+        <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(r.dirAbs || '')}"
+                title="在资源管理器里打开：${esc(r.dirAbs || '')}">打开所在目录</button>`;
+    return `
     <div class="wr-item" data-report-index="${i}">
       <div class="wr-rep">
         <div style="min-width:0;flex:1 1 auto">
           <div class="wr-rep__name">${esc(r.name)}</div>
-          <div class="wr-rep__sub">${esc(r.dir || '.')} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
-        </div>
-        <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(r.dirAbs || r.dir)}" title="在资源管理器里打开所在目录">打开目录</button>
+          <div class="wr-rep__sub">${dirLabel} · ${r.entries} 条 · ${fmtSize(r.size)} · ${esc(fmtTime(r.mtime))}</div>
+        </div>${dirBtn}
         <button class="wr-btn" data-view="${esc(r.path)}">查看</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   box._items = list;
 }
 
@@ -313,6 +319,24 @@ function renderNotes(notes) {
 }
 
 /* ---------------------------------------------------------------- 渲染：运行 */
+/* ---------------------------------------------------------------- 日志：滚动跟随 */
+function logAutoScroll() {
+  const box = $('#opt-log-auto');
+  return !box || box.checked;
+}
+
+function isLogAtBottom(pre) {
+  if (!pre) return true;
+  // 差 8px 以内算「在底部」，避免像素级抖动导致回不到底
+  return pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 8;
+}
+
+function scrollLogToEnd() {
+  const pre = $('#run-log');
+  if (!pre) return;
+  pre.scrollTop = pre.scrollHeight;
+}
+
 function setLogState(run) {
   const dot = $('#log-dot');
   const text = $('#log-state');
@@ -344,8 +368,20 @@ function renderRun(run) {
         : '';
   if (run && run.lines && run.lines.length) {
     const pre = $('#run-log');
-    pre.textContent = run.lines.join('\n');
-    pre.scrollTop = pre.scrollHeight;
+    const text = run.lines.join('\n');
+    if (pre.textContent !== text) {
+      // 用户往上翻看时不要把他拽回底部：只在「本来就在底部」或「自动滚动开着」时才跟到底。
+      // 不跟到底时还要把滚动位置按新增高度补偿回去，否则换文本会把人弹回顶部。
+      const wasAtBottom = isLogAtBottom(pre);
+      const oldTop = pre.scrollTop;
+      const oldHeight = pre.scrollHeight;
+      pre.textContent = text;
+      if (wasAtBottom || logAutoScroll()) {
+        pre.scrollTop = pre.scrollHeight;
+      } else {
+        pre.scrollTop = Math.max(0, oldTop + (pre.scrollHeight - oldHeight));
+      }
+    }
   }
   setLogState(run);
 
@@ -595,6 +631,7 @@ function bindActions() {
     try {
       await post('/api/run', body);
       $('#run-log').textContent = '已启动，等待输出…';
+      scrollLogToEnd();
       pollRun();
       toast('已开始生成', 'ok');
     } catch (e) { toast('启动失败：' + e.message, 'err'); }
@@ -603,6 +640,21 @@ function bindActions() {
   $('#btn-cancel').onclick = async () => {
     try { await post('/api/run/cancel', {}); toast('已请求终止'); } catch (e) { toast(e.message, 'err'); }
   };
+
+  $('#btn-log-tail').onclick = () => {
+    scrollLogToEnd();
+    toast('已跳到日志末尾', 'ok');
+  };
+  $('#opt-log-auto').onchange = (e) => {
+    try { localStorage.setItem('wr-log-autoscroll', e.target.checked ? '1' : '0'); } catch (_) { /* ignore */ }
+    if (e.target.checked) scrollLogToEnd();
+    toast(e.target.checked ? '已开启自动滚动' : '已关闭自动滚动，可安心往回翻', 'ok');
+  };
+  // 记住「自动滚动」的偏好
+  try {
+    const saved = localStorage.getItem('wr-log-autoscroll');
+    if (saved !== null) $('#opt-log-auto').checked = saved === '1';
+  } catch (_) { /* ignore */ }
 
   $('#btn-clear-log').onclick = () => {
     const pre = $('#run-log');
@@ -957,7 +1009,7 @@ function runLayoutDiag() {
 
 // 测试用：?diag=1 时把几个渲染函数挂到 window，方便验证「没有路径就没有开关」这类边界
 if (new URLSearchParams(location.search).has('diag')) {
-  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, pathShown, syncPathToggles };
+  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, renderRun, pathShown, syncPathToggles };
 }
 
 document.addEventListener('DOMContentLoaded', () => {

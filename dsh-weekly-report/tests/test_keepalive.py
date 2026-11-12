@@ -294,6 +294,31 @@ def main():
             check("open-dir：输出目录外被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
             code, r = post("/api/open-dir", {})
             check("open-dir：空路径被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
+
+            # 场景：周报文件**直接躺在输出根目录**（没有子目录）——按钮不能失效
+            flat = os.path.join(tmp, "flat")
+            os.makedirs(flat, exist_ok=True)
+            with open(os.path.join(flat, "周报_2026-11-02_2026-11-08.txt"), "w", encoding="utf-8") as f:
+                f.write("【项目运维】\n示例学校\n  进度：100%\n")
+            cfg["out_dir"] = flat
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            time.sleep(0.6)
+            ms, body = get("/api/state?force=1", timeout=20)   # force=1 绕过 30 秒状态缓存
+            flat_state = json.loads(body)
+            flat_reports = flat_state["reports"]
+            check("扁平目录：报告仍被列出", len(flat_reports) == 1, str(len(flat_reports)))
+            if flat_reports:
+                fr = flat_reports[0]
+                check("扁平目录：inRoot 标记为真", fr.get("inRoot") is True, str(fr))
+                check("扁平目录：dirAbs 指向输出根目录",
+                      os.path.normcase(os.path.dirname(fr["path"])) == os.path.normcase(flat), str(fr))
+            code, r = post("/api/open-dir", {"path": flat})
+            check("扁平目录：打开输出根目录成功", code == 200 and r.get("ok") is True, f"{code} {r}")
+            if flat_reports:
+                code, r = post("/api/open-dir", {"path": flat_reports[0]["path"]})
+                check("扁平目录：打开周报文件（选中）成功",
+                      code == 200 and r.get("ok") is True and r.get("selected") is True, f"{code} {r}")
     finally:
         # 收拾：先按 ping 报的 pid 精确杀掉（watchdog 拉起的那个进程是 detached 的）
         try:

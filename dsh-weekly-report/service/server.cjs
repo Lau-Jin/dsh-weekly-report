@@ -190,11 +190,13 @@ function listReports() {
       if (!/^周报_.*\.txt$/.test(e.name)) continue;
       try {
         const st = fs.statSync(full);
+        const dirAbs = path.dirname(full);
         out.push({
           name: e.name,
           path: full,
-          dir: path.relative(outDir, path.dirname(full)) || '.',
-          dirAbs: path.dirname(full),          // 绝对目录：面板上「打开目录」与「显示路径」用
+          dir: path.relative(outDir, dirAbs) || '.',
+          dirAbs,                               // 绝对目录：面板上「打开目录」用
+          inRoot: path.resolve(dirAbs) === path.resolve(outDir),  // 直接躺在输出根目录
           size: st.size,
           mtime: st.mtime.toISOString(),
           entries: countEntries(full),
@@ -212,14 +214,28 @@ function listReports() {
 
  * 只允许打开周报输出目录以内的位置，免得接口变成任意路径打开器。
  */
+function _realish(p) {
+  try { return fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p); } catch (_) { return p; }
+}
+
+/** target 是否在 base 之内（按路径分量判断；base 自身算在内）。 */
+function _within(base, target) {
+  const rel = path.relative(base, target);
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false;
+  return !rel.split(/[\\/]/).includes('..');
+}
+
 function openInExplorer(target) {
   const raw = String(target || '').trim();
   if (!raw) return { ok: false, error: '缺少路径' };
   if (process.platform !== 'win32') return { ok: false, error: '当前系统暂不支持直接打开目录' };
   const base = path.resolve(reportsDir());
   const full = path.resolve(raw);
-  const rel = path.relative(base, full);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+  // 再按真实路径比一次：目录是 junction / 软链时 realpath 才是同一个地方
+  const realBase = _realish(base);
+  const realFull = _realish(full);
+  if (!_within(base, full) && !_within(realBase, realFull)) {
     return { ok: false, error: '只能打开周报输出目录内的位置' };
   }
   let stat;
@@ -245,7 +261,7 @@ function openInExplorer(target) {
     }
   }
   // explorer.exe 交接到已有 shell 后自己退出，退出码 1 属正常，不代表失败
-  return { ok: true, opened: full, selected: isFile, app: 'explorer' };
+  return { ok: true, opened: full, selected: isFile, app: 'explorer', root: base };
 }
 
 // ---------------------------------------------------------------- 注意事项

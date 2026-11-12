@@ -209,9 +209,18 @@ async function main() {
     };
   })()`)
   check('历史不再有「显示路径」开关（没有作用，改成打开目录）', hist.stillHasToggle === false)
-  check('每条周报都有「打开目录」按钮', hist.n > 0 && hist.openBtns === hist.n, JSON.stringify(hist))
-  check('「打开目录」带的是绝对路径', hist.firstDir.length > 2 && hist.firstDir.charAt(1) === ':' && hist.firstDir.charAt(2) === String.fromCharCode(92), hist.firstDir)
-  check('工具栏有「打开周报目录」按钮', hist.rootBtn === true && hist.rootBtnHidden === false, JSON.stringify(hist))
+  check('工具栏有「打开输出目录」按钮', hist.rootBtn === true && hist.rootBtnHidden === false, JSON.stringify(hist))
+  check('工具栏按钮文字是「打开输出目录」',
+    (await evaluate(client, "document.querySelector('#btn-open-outdir').textContent.trim()")) === '打开输出目录')
+  // 文件在子目录里 → 行内有「打开所在目录」；在根目录里 → 行内不显示（与工具栏同一个地方）
+  const inRoot = hist.n > 0 && hist.openBtns === 0
+  check('行内「打开所在目录」只在子目录场景出现', inRoot || hist.openBtns === hist.n, JSON.stringify(hist))
+  if (!inRoot) {
+    check('「打开所在目录」带的是绝对路径',
+      hist.firstDir.length > 2 && hist.firstDir.charAt(1) === ':' && hist.firstDir.charAt(2) === String.fromCharCode(92), hist.firstDir)
+    check('行内按钮文字是「打开所在目录」',
+      (await evaluate(client, "document.querySelector('#report-list [data-open-dir]').textContent.trim()")) === '打开所在目录')
+  }
 
   // 8. localStorage 按卡片记
   const saved = JSON.parse(await evaluate(client, "window.localStorage.getItem('wr-show-paths')"))
@@ -265,6 +274,43 @@ async function main() {
   check('没有路径时：路径卡不给开关', noPath.pathsWithoutPath === true, JSON.stringify(noPath))
   check('有路径时：开关回来（定时任务 / 最近一次生成 / 路径卡）',
     noPath.scheduleWithPath && noPath.lastrunWithPath && noPath.pathsWithPath, JSON.stringify(noPath))
+
+  // 9.65 日志区：自动滚动开关 + 跳到末尾
+  const logCtl = await evaluate(client, `(() => {
+    const pre = document.querySelector('#run-log');
+    const auto = document.querySelector('#opt-log-auto');
+    const tail = document.querySelector('#btn-log-tail');
+    return {
+      hasAuto: !!auto, autoChecked: auto && auto.checked, hasTail: !!tail,
+      tailText: tail && tail.textContent.trim(),
+    };
+  })()`)
+  check('日志区有「自动滚动」开关', logCtl.hasAuto === true && logCtl.autoChecked === true, JSON.stringify(logCtl))
+  check('日志区有「跳到末尾」按钮', logCtl.hasTail === true && logCtl.tailText === '跳到末尾', JSON.stringify(logCtl))
+  // 往日志里塞内容后：自动滚动开着 → 停在底部；关掉 → 位置不被拽到底
+  const scrollCase = await evaluate(client, `(() => {
+    const pre = document.querySelector('#run-log');
+    const auto = document.querySelector('#opt-log-auto');
+    const d = window.__wrDebug;
+    if (!d) return { ok: false, reason: 'no debug hook' };
+    const NL = String.fromCharCode(10);
+    pre.textContent = Array.from({ length: 200 }, (_, i) => '第 ' + i + ' 行').join(NL);
+    pre.scrollTop = pre.scrollHeight;
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 8;
+    // 往上翻
+    pre.scrollTop = 0;
+    const topBefore = pre.scrollTop;
+    auto.checked = false;
+    d.renderRun({ startedAt: '2026-11-12T00:00:00Z', exitCode: 0, running: false, lines: Array.from({ length: 260 }, (_, i) => '第 ' + i + ' 行') });
+    const topAfter = pre.scrollTop;
+    auto.checked = true;
+    d.renderRun({ startedAt: '2026-11-12T00:00:00Z', exitCode: 0, running: false, lines: Array.from({ length: 300 }, (_, i) => '第 ' + i + ' 行') });
+    const bottomAfter = pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 8;
+    return { ok: true, atBottom, topBefore, topAfter, bottomAfter };
+  })()`)
+  check('自动滚动开着时停在日志底部', scrollCase.atBottom === true, JSON.stringify(scrollCase))
+  check('关掉自动滚动后不会把用户拽回底部（位置保持）', scrollCase.topAfter <= scrollCase.topBefore + 40, JSON.stringify(scrollCase))
+  check('重新打开自动滚动后会跟到最新', scrollCase.bottomAfter === true, JSON.stringify(scrollCase))
 
   // 9.7 打开目录接口：输出目录内放行、目录外拒绝、空路径拒绝
   const openApi = await evaluate(client, `(async () => {

@@ -298,6 +298,10 @@
           <span class="wr-logbar__dot" id="log-dot"></span>
           <span class="wr-logbar__text" id="log-state">等待生成</span>
           <span class="wr-logbar__spacer"></span>
+          <button class="wr-minibtn" id="btn-log-tail" title="跳到日志末尾">跳到末尾</button>
+          <label class="wr-logbar__auto" title="新日志到达时自动滚到底；关掉后可以安心往回翻">
+            <input type="checkbox" id="opt-log-auto" checked /> 自动滚动
+          </label>
           <button class="wr-minibtn" id="btn-clear-log">清空</button>
         </div>
         <pre class="wr-pre" id="run-log" style="border:0;border-radius:0;max-height:44vh">（还没有日志）</pre>
@@ -311,7 +315,7 @@
           <input id="report-search" type="search" placeholder="搜索文件名…" />
         </div>
         <button class="wr-btn" id="btn-reload-reports">重新扫描</button>
-        <button class="wr-btn wr-btn--ghost" id="btn-open-outdir" title="在资源管理器里打开周报输出目录">打开周报目录</button>
+        <button class="wr-btn wr-btn--ghost" id="btn-open-outdir" title="在资源管理器里打开周报输出目录（周报都存放在这里）">打开输出目录</button>
         <span class="wr-field__hint" id="report-hint"></span>
       </div>
       <div class="wr-list" id="report-list"></div>
