@@ -1612,6 +1612,64 @@ def perf_path_for(folder, handler, year, month):
                         f"{year}年{month}月{handler}员工月度考核表-交付中心.xlsx")
 
 
+def perf_template_report(folder, handler="张三", year=None, month=None):
+    """检查绩效表模板是否可用：新装机器用它看"缺什么、怎么补"。"""
+    import glob
+    import openpyxl
+    out = {"folder": folder, "ok": False, "items": [], "errors": [], "hints": []}
+    if not folder or not os.path.isdir(folder):
+        out["errors"].append(f"绩效表目录不存在：{folder}")
+        out["hints"].append("在「配置 → 绩效表目录」里填一个存在的目录")
+        return out
+    # 递归找（绩效表目录可能是「绩效表\2026」这种层级，模板在下一层）
+    files = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        depth = dirpath[len(folder):].count(os.sep)
+        if depth > 2:
+            dirnames[:] = []
+            continue
+        for fn in filenames:
+            if fn.lower().endswith(".xlsx") and not fn.startswith("~$"):
+                files.append(os.path.join(dirpath, fn))
+    files = sorted(files)
+    if not files:
+        out["errors"].append(f"目录里没有任何 .xlsx 模板：{folder}")
+        out["hints"].append(
+            "把一张当月的《员工月度考核表》复制到这个目录（名字随意），下次生成就会自动套用它；"
+            "或从模板另存一份空的放进去")
+        return out
+    for f in files:
+        item = {"name": os.path.basename(f), "path": f, "ok": True, "notes": []}
+        try:
+            wb = openpyxl.load_workbook(f)
+        except Exception as e:
+            item["ok"] = False
+            item["notes"].append(f"打不开：{e}")
+            out["items"].append(item)
+            continue
+        if "月度考核" in wb.sheetnames:
+            ws = wb["月度考核"]
+        else:
+            ws = wb[wb.sheetnames[-1]]
+            item["notes"].append(f"没有「月度考核」工作表，将使用最后一个（{ws.title}）")
+        start, cap, sec = perf_task_zone(ws)
+        item["task_rows"] = cap
+        item["section_row"] = sec
+        if ws.cell(3, 4).value in (None, ""):
+            item["notes"].append("D3（被考评人）是空的")
+        if ws.cell(4, 4).value in (None, ""):
+            item["notes"].append("D4（考评时间）是空的")
+        if item["notes"]:
+            item["ok"] = True
+        out["items"].append(item)
+    out["ok"] = any(i.get("ok") for i in out["items"])
+    if year and month:
+        want = perf_path_for(folder, handler, year, month)
+        out["current_target"] = want
+        out["current_exists"] = os.path.isfile(want)
+    return out
+
+
 def perf_dump(path):
     """把绩效表读成可展示的结构（JSON 友好）：基本信息 + 任务区每一行。"""
     import openpyxl
@@ -2460,11 +2518,16 @@ def current_week(today=None):
 
 
 def auto_pick_xlsx(folder, target_date):
-    """在考核表目录里挑出目标日期所在月份的文件；没有则用最新的一个。"""
+    """在考核表目录里挑出目标日期所在月份的文件；没有则用最新的一个。
+
+    返回 None 表示目录里一张表都没有（新装的机器就是这样）——由调用方决定跳过还是报错，
+    这里不再直接 SystemExit，避免把整次周报生成带崩。
+    """
     import glob
     files = sorted(glob.glob(os.path.join(folder, "*.xlsx")))
+    files = [f for f in files if not os.path.basename(f).startswith("~$")]
     if not files:
-        raise SystemExit(f"目录下没有 xlsx：{folder}")
+        return None
     tag = f"{target_date.year}年{target_date.month:02d}月"
     for f in files:
         if tag in os.path.basename(f):
@@ -3172,6 +3235,8 @@ def main():
                     help="按周期自动生成绩效文档到 输出目录\\绩效\\YYYY年MM月绩效_学校工单.xlsx")
     ap.add_argument("--perf-template", help="绩效文档模板（默认取当月的月度考核表）")
     ap.add_argument("--perf-month", help="绩效文档月份 YYYY-MM，默认取周期所在月")
+    ap.add_argument("--perf-template-check", action="store_true",
+                    help="检查绩效表目录里的模板能不能用（新装机器自检用，输出 JSON）")
     ap.add_argument("--perf-dump", action="store_true",
                     help="把绩效表读成 JSON 输出（面板「查看绩效表」用）")
     ap.add_argument("--perf-check", action="store_true",
@@ -3224,6 +3289,17 @@ def main():
 
     if args.log:
         enable_log()
+
+    if args.perf_template_check:
+        y1, m1 = (None, None)
+        if args.perf_month:
+            y1, m1 = [int(x) for x in args.perf_month.split("-")]
+        else:
+            today1 = _today_cn()
+            y1, m1 = today1.year, today1.month
+        print(json.dumps(perf_template_report(folder, handler, y1, m1),
+                         ensure_ascii=False, default=str))
+        return
 
     if args.perf_dump:
         target = args.perf_xlsx
@@ -3408,14 +3484,21 @@ def main():
                     tpl = perf_out          # 当月表已存在 → 就地累积（先读旧行再合并）
                 else:
                     tpl = auto_pick_xlsx(folder, ms)
-                built = build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
+                if not tpl or not os.path.isfile(tpl):
+                    # 没有模板（新机器的绩效表目录是空的）：周报照常生成，只是不写绩效表
+                    print(f"提示：绩效表目录里还没有可用的模板（{folder}），本次不写绩效表；"
+                          f"把一张月度考核表放进该目录即可自动套用")
+                    tpl = None
+                if tpl:
+                    built = build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
 
                 # 自检：对照本月各周周报补齐缺失；本周覆盖月末时就是月底核对
-                month_end_week = we >= me - timedelta(days=6)
-                perf_check_report(built, y, m, handler, fix=True,
-                                  platform_items=(m_items if full_month else None))
-                if month_end_week:
-                    print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
+                if tpl:
+                    month_end_week = we >= me - timedelta(days=6)
+                    perf_check_report(built, y, m, handler, fix=True,
+                                      platform_items=(m_items if full_month else None))
+                    if month_end_week:
+                        print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
 
                 # 上个月的绩效表若还没核对过，顺手补一次（纯文本比对，不额外调接口）
                 py_, pm_ = (y - 1, 12) if m == 1 else (y, m - 1)

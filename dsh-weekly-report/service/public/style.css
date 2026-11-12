@@ -419,6 +419,64 @@ html, body {
 .wr-logbar__auto { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--fg-3); cursor: pointer; user-select: none; }
 .wr-logbar__auto input { margin: 0; cursor: pointer; }
 
+/* ---------------------------------------------------------------- 绩效表 */
+.wr-ptable__head {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 8px; margin-bottom: 2px; border-bottom: 1px solid var(--line);
+}
+.wr-ptable__meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.wr-ptable__name { font-size: 12.5px; font-weight: 600; font-family: var(--mono); word-break: break-all; }
+.wr-ptable__stats { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.wr-ptable__wrap {
+  max-height: 44vh; overflow: auto; margin-top: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg-soft);
+}
+.wr-ptable { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.wr-ptable th, .wr-ptable td { text-align: left; padding: 6px 10px; vertical-align: top; }
+.wr-ptable thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg); color: var(--fg-3); font-weight: 600; font-size: 11.5px;
+  border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+}
+.wr-ptable tbody tr + tr td { border-top: 1px solid var(--line); }
+.wr-ptable tbody tr:hover td { background: var(--bg); }
+/* 列宽用 colgroup 定死（table-layout: fixed 才认它），中文标题不会挤歪 */
+.wr-ptable__col-cat { width: 96px; }
+.wr-ptable__col-item { width: auto; }
+.wr-ptable__col-when { width: 176px; }
+.wr-ptable__col-done { width: 88px; }
+.wr-ptable__cat { white-space: nowrap; color: var(--fg-2); }
+.wr-ptable__item { width: auto; word-break: break-word; line-height: 1.6; }
+.wr-ptable__when { white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); }
+.wr-ptable__done { text-align: center !important; }
+.wr-ptable__note { margin-top: 3px; font-size: 11px; color: var(--fg-3); }
+.wr-pill {
+  display: inline-block; min-width: 26px; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; text-align: center; border: 1px solid transparent;
+}
+.wr-pill--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.wr-pill--warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+
+/* 往月绩效表：按目录收拢 */
+.wr-pgroup { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); margin-bottom: 8px; }
+.wr-pgroup__head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  padding: 8px 12px; font-size: 12px; user-select: none;
+}
+.wr-pgroup__head::-webkit-details-marker { display: none; }
+.wr-pgroup__head::before {
+  content: '▸'; display: inline-block; width: 12px; color: var(--fg-3);
+  transition: transform .12s;
+}
+.wr-pgroup[open] > .wr-pgroup__head::before { transform: rotate(90deg); }
+.wr-pgroup__name { font-weight: 600; font-family: var(--mono); }
+.wr-pgroup__count { margin-left: auto; color: var(--fg-3); font-size: 11px; }
+.wr-pgroup__body { padding: 0 12px 8px; }
+.wr-pitem { border-top: 1px solid var(--line); padding: 8px 0; }
+.wr-pitem:first-child { border-top: 0; }
+.wr-pitem__view { margin-top: 8px; }
+.wr-pitem__err { color: var(--err); font-size: 12px; }
+
 /* ---------------------------------------------------------------- 底部固定操作条 */
 .wr-sticky {
   position: sticky; bottom: -28px; margin: 16px -16px -28px;

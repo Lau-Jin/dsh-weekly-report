@@ -301,6 +301,82 @@ async function main() {
   check('绩效表卡片有「核对本月绩效表」按钮', perfCard.check === true)
   check('绩效表卡片显示本月表的状态', perfCard.text.length > 0, perfCard.text)
   check('绩效表卡片列出往月表', perfCard.archiveItems > 0, String(perfCard.archiveItems))
+
+  // 表格渲染：必须是真表格（制表符文本在中英文混排下必然错位）
+  await evaluate(client, "document.querySelector('#btn-perf-view').click()")
+  await sleep(2500)
+  const tbl = await evaluate(client, `(() => {
+    const t = document.querySelector('#perf-view-out .wr-ptable');
+    const rows = document.querySelectorAll('#perf-view-out .wr-ptable tbody tr');
+    const ths = t ? Array.from(t.querySelectorAll('thead th')).map((x) => x.textContent.trim()) : [];
+    const first = rows[0] ? Array.from(rows[0].children).map((td) => td.textContent.trim()) : [];
+    const cells = rows[0] ? Array.from(rows[0].children).map((td) => {
+      const r = td.getBoundingClientRect();
+      return Math.round(r.width);
+    }) : [];
+    const pre = document.querySelector('#perf-view-out pre');
+    return {
+      hasTable: !!t, rows: rows.length, ths, first, widths: cells,
+      hasTabbedPre: !!(pre && pre.textContent.includes(String.fromCharCode(9))),
+      head: !!document.querySelector('#perf-view-out .wr-ptable__head'),
+      pills: document.querySelectorAll('#perf-view-out .wr-pill').length,
+    };
+  })()`)
+  check('绩效表内容渲染成表格（不是制表符文本）',
+    tbl.hasTable === true && tbl.hasTabbedPre === false, JSON.stringify(tbl))
+  check('表格有表头四列', tbl.ths.length === 4 && tbl.ths[0] === '类别' && tbl.ths[3] === '是否完成', JSON.stringify(tbl.ths))
+  check('表格每行列数一致', tbl.first.length === 4, JSON.stringify(tbl.first))
+  check('表格列宽固定不塌陷（事项列最宽）',
+    tbl.widths.length === 4 && tbl.widths[1] > tbl.widths[0] && tbl.widths[1] > tbl.widths[3], JSON.stringify(tbl.widths))
+  // 不错位：每一行同一列的左边界必须一致（差 ≤1px）
+  const align = await evaluate(client, `(() => {
+    const rows = Array.from(document.querySelectorAll('#perf-view-out .wr-ptable tbody tr'));
+    const cols = 4;
+    const offsets = [];
+    for (let c = 0; c < cols; c += 1) {
+      const xs = rows.map((r) => Math.round(r.children[c].getBoundingClientRect().left * 10) / 10);
+      offsets.push(Math.max(...xs) - Math.min(...xs));
+    }
+    const heights = rows.map((r) => Math.round(r.getBoundingClientRect().height));
+    return { offsets, maxDrift: Math.max(...offsets), rowHeights: heights.slice(0, 5) };
+  })()`)
+  check('表格每列左边界一致（不串列、不错位）', align.maxDrift <= 1, JSON.stringify(align.offsets))
+  check('每行高度正常（内容不互相压叠）',
+    align.rowHeights.every((h) => h >= 14), JSON.stringify(align.rowHeights))
+  check('是否完成用徽标显示', tbl.pills > 0, String(tbl.pills))
+
+  // 往月表：按目录分组，点「查看」内容出现在该条下面
+  const arch = await evaluate(client, `(() => {
+    const groups = Array.from(document.querySelectorAll('.wr-pgroup'));
+    const item = document.querySelector('.wr-pitem');
+    return {
+      groups: groups.length,
+      groupNames: groups.map((g) => g.querySelector('.wr-pgroup__name').textContent.trim()),
+      items: document.querySelectorAll('.wr-pitem').length,
+      itemHasView: !!(item && item.querySelector('.wr-pitem__view')),
+      viewHidden: item ? item.querySelector('.wr-pitem__view').hidden : null,
+      btnText: item ? item.querySelector('[data-perf-view]').textContent.trim() : '',
+    };
+  })()`)
+  check('往月绩效表按目录（年份）收拢分组', arch.groups >= 1 && arch.groupNames.length === arch.groups, JSON.stringify(arch))
+  check('每条往月表有自己的展开区', arch.itemHasView === true && arch.viewHidden === true, JSON.stringify(arch))
+  await evaluate(client, "document.querySelector('.wr-pitem [data-perf-view]').click()")
+  await sleep(2500)
+  const archAfter = await evaluate(client, `(() => {
+    const item = document.querySelector('.wr-pitem');
+    const out = item.querySelector('.wr-pitem__view');
+    return {
+      hidden: out.hidden,
+      hasTable: !!out.querySelector('.wr-ptable'),
+      rows: out.querySelectorAll('.wr-ptable tbody tr').length,
+      btnText: item.querySelector('[data-perf-view]').textContent.trim(),
+      // 内容必须在这条里面，不能跑到别的容器去
+      insideItem: out.closest('.wr-pitem') === item,
+    };
+  })()`)
+  check('点往月表的「查看」→ 内容显示在该条下面',
+    archAfter.hidden === false && archAfter.hasTable === true && archAfter.insideItem === true, JSON.stringify(archAfter))
+  check('展开后按钮变成「收起」', archAfter.btnText === '收起', archAfter.btnText)
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"overview\"]').click()")
   await sleep(200)
 

@@ -348,6 +348,47 @@ def main():
                   code == 403 or "ok" not in (json.loads(body) if body.startswith("{") else {}),
                   f"{code} {str(body)[:120]}")
 
+            # 模板自检（GET）
+            _ms, body = get("/api/perf/template", timeout=90)
+            tj = json.loads(body)
+            check("perf/template：自检可用", tj.get("ok") is True and bool((tj.get("report") or {}).get("items")),
+                  str(tj)[:160])
+            check("perf/template：认出刚造的模板",
+                  any("2026年11月" in (it.get("name") or "") for it in tj["report"]["items"]),
+                  str([it.get("name") for it in tj["report"]["items"]])[:160])
+
+            # 空目录（别人新装）：模板自检要给出可执行的提示，而不是崩
+            empty_perf = os.path.join(tmp, "perf_empty")
+            os.makedirs(empty_perf, exist_ok=True)
+            cfg["folder"] = empty_perf
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            time.sleep(0.6)
+            _ms, body = get("/api/perf/template", timeout=90)
+            ej = json.loads(body)
+            rep = ej.get("report") or {}
+            check("perf/template：空目录时报告不通过", rep.get("ok") is False, str(rep)[:160])
+            check("perf/template：空目录时给出补救提示",
+                  bool(rep.get("errors")) and bool(rep.get("hints")), str(rep)[:200])
+
+            # 模板缺失时 auto_pick_xlsx 不再抛异常（避免整次生成被带崩）
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("gen_weekly_text", os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "service", "engine", "gen_weekly_text.py"))
+            _g = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_g)
+            import datetime as _dt
+            picked = _g.auto_pick_xlsx(empty_perf, _dt.date(2026, 11, 1))
+            check("auto_pick_xlsx：目录为空时返回 None 而不是抛错", picked is None, repr(picked))
+            picked2 = _g.auto_pick_xlsx(os.path.dirname(sample_perf), _dt.date(2026, 11, 1))
+            check("auto_pick_xlsx：能挑到当月的表", picked2 is not None and "2026年11月" in os.path.basename(picked2),
+                  repr(picked2))
+
+            cfg["folder"] = perf_root
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            time.sleep(0.4)
+
             code, r = post("/api/open-dir", {"path": "C:/Windows"})
             check("open-dir：输出目录外被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
             code, r = post("/api/open-dir", {})

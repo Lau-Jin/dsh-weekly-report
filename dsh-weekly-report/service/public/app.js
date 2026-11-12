@@ -241,6 +241,45 @@ function setDirty(v) {
 }
 
 /* ---------------------------------------------------------------- 渲染：绩效表 */
+/** 绩效表内容渲染成表格（不是制表符文本——中文宽度不一，制表符必然错位）。 */
+function perfTableHtml(tbl) {
+  const rows = tbl.rows || [];
+  const head = `
+    <div class="wr-ptable__head">
+      <div class="wr-ptable__meta">
+        <span class="wr-ptable__name">${esc(tbl.name || '')}</span>
+        <span class="wr-chip">考核期间 ${esc(tbl.period || '—')}</span>
+        <span class="wr-chip">处理人 ${esc(tbl.handler || '—')}</span>
+        ${tbl.filled_at ? `<span class="wr-chip">填报 ${esc(String(tbl.filled_at).replace('T', ' ').slice(0, 16))}</span>` : ''}
+      </div>
+      <div class="wr-ptable__stats">
+        <span class="wr-chip wr-chip--ok">已完成 ${tbl.done || 0}</span>
+        <span class="wr-chip wr-chip--warn">未完成 ${tbl.undone || 0}</span>
+        <span class="wr-chip">共 ${tbl.total || 0} 条</span>
+      </div>
+    </div>`;
+  if (!rows.length) {
+    return head + '<div class="wr-empty">这张表的任务区还没有内容</div>';
+  }
+  const body = rows.map((r) => {
+    const when = r.d1 === r.d2 ? (r.d1 || '—') : `${r.d1 || '—'} ~ ${r.d2 || '—'}`;
+    return `<tr>
+      <td class="wr-ptable__cat">${esc(r.category || '')}</td>
+      <td class="wr-ptable__item">${esc(r.content || '')}${r.note ? `<div class="wr-ptable__note">${esc(r.note)}</div>` : ''}</td>
+      <td class="wr-ptable__when">${esc(when)}</td>
+      <td class="wr-ptable__done"><span class="wr-pill ${r.settled ? 'wr-pill--ok' : 'wr-pill--warn'}">${r.settled ? '是' : '否'}</span></td>
+    </tr>`;
+  }).join('');
+  return head + `<div class="wr-ptable__wrap"><table class="wr-ptable">
+      <colgroup>
+        <col class="wr-ptable__col-cat" /><col class="wr-ptable__col-item" />
+        <col class="wr-ptable__col-when" /><col class="wr-ptable__col-done" />
+      </colgroup>
+      <thead><tr><th>类别</th><th>事项</th><th>起止时间</th><th>是否完成</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
+}
+
 function renderPerf(perf) {
   const box = $('#perf-current');
   const hint = $('#perf-hint');
@@ -252,6 +291,7 @@ function renderPerf(perf) {
   if (!info.root) {
     box.innerHTML = '<span class="wr-muted">未配置绩效表目录（配置页「绩效表目录」填一下）</span>';
     if (hint) hint.textContent = '';
+    renderPerfArchive([], current);
     return;
   }
   if (!current) {
@@ -273,51 +313,68 @@ function renderPerf(perf) {
       <div class="wr-mono" style="font-size:11px;color:var(--fg-3);margin-top:7px;word-break:break-all">${esc(current)}</div>`;
     if (hint) hint.textContent = '生成周报时会自动写入';
   }
-
-  // 往月的表
-  const archive = $('#perf-archive');
-  const list = $('#perf-archive-list');
-  if (archive && list) {
-    const others = tables.filter((t) => t.path !== current);
-    archive.hidden = others.length === 0;
-    list.innerHTML = others.length ? others.map((t) => `
-      <div class="wr-rep" style="padding:6px 0;border-bottom:1px solid var(--line)">
-        <div style="min-width:0;flex:1 1 auto">
-          <div class="wr-rep__name" style="font-size:12px">${esc(t.name)}</div>
-          <div class="wr-rep__sub">${esc(t.dir || '.')} · ${fmtSize(t.size)} · ${esc(fmtTime(t.mtime))}</div>
-        </div>
-        <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">查看</button>
-        <button class="wr-btn wr-btn--ghost" data-perf-open="${esc(t.dirAbs || '')}">打开目录</button>
-      </div>`).join('') : '';
-  }
+  renderPerfArchive(tables.filter((t) => t.path !== current), current);
 }
 
-/** 绩效表内容预览（服务端读表，直接渲染成文本表格）。 */
-async function viewPerfTable(path, title) {
-  const pre = $('#perf-view-out');
-  if (!pre) return;
-  pre.hidden = false;
-  pre.textContent = '正在读取绩效表…';
+/** 往月的绩效表：按所在目录（年份）收拢，点「查看」就在那一条下面展开内容。 */
+function renderPerfArchive(tables, current) {
+  const archive = $('#perf-archive');
+  const list = $('#perf-archive-list');
+  if (!archive || !list) return;
+  archive.hidden = !tables.length;
+  if (!tables.length) { list.innerHTML = ''; return; }
+
+  // 按目录（年份）分组
+  const groups = new Map();
+  for (const t of tables) {
+    const key = t.dir || '.';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const keys = Array.from(groups.keys()).sort((a, b) => b.localeCompare(a, 'zh-CN'));
+  list.innerHTML = keys.map((key) => {
+    const items = groups.get(key);
+    const label = key === '.' ? '根目录' : key;
+    return `<details class="wr-pgroup" open>
+      <summary class="wr-pgroup__head">
+        <span class="wr-pgroup__name">${esc(label)}</span>
+        <span class="wr-pgroup__count">${items.length} 张</span>
+      </summary>
+      <div class="wr-pgroup__body">
+        ${items.map((t) => `
+          <div class="wr-pitem" data-perf-item="${esc(t.path)}">
+            <div class="wr-rep">
+              <div style="min-width:0;flex:1 1 auto">
+                <div class="wr-rep__name" style="font-size:12px">${esc(t.name)}</div>
+                <div class="wr-rep__sub">${fmtSize(t.size)} · ${esc(fmtTime(t.mtime))}</div>
+              </div>
+              <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">查看</button>
+              <button class="wr-btn wr-btn--ghost" data-perf-open="${esc(t.dirAbs || '')}">打开目录</button>
+            </div>
+            <div class="wr-pitem__view" hidden></div>
+          </div>`).join('')}
+      </div>
+    </details>`;
+  }).join('');
+}
+
+/** 读一张绩效表并渲染（容器可以是本月卡的输出区，也可以是某一条往月表下面的展开区）。 */
+async function viewPerfTable(path, container) {
+  const box = typeof container === 'string' ? $(container) : container;
+  if (!box) return null;
+  box.hidden = false;
+  box.innerHTML = '<div class="wr-muted">正在读取绩效表…</div>';
   try {
     const r = await api('/api/perf/table?path=' + encodeURIComponent(path));
-    if (!r.ok) { pre.textContent = '读取失败：' + (r.error || '未知原因'); return; }
-    const t = r.table || {};
-    const lines = [];
-    lines.push(`${t.name || ''}`);
-    lines.push(`考核期间：${t.period || '—'}　处理人：${t.handler || '—'}`);
-    if (t.filled_at) lines.push(`填报时间：${String(t.filled_at).replace('T', ' ').slice(0, 19)}`);
-    lines.push(`共 ${t.total || 0} 条，已完成 ${t.done || 0} 条，未完成 ${t.undone || 0} 条`);
-    lines.push('');
-    lines.push('类别	事项	起止时间	是否完成');
-    for (const row of (t.rows || [])) {
-      const when = row.d1 === row.d2 ? row.d1 : `${row.d1} ~ ${row.d2}`;
-      lines.push(`${row.category || ''}	${row.content || ''}	${when || ''}	${row.settled ? '是' : '否'}`);
+    if (!r.ok) {
+      box.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(r.error || '未知原因')}</div>`;
+      return null;
     }
-    pre.textContent = lines.join('\n');
-    pre.scrollTop = 0;
-    if (title) toast(`已载入 ${t.name || '绩效表'}`, 'ok');
+    box.innerHTML = perfTableHtml(r.table || {});
+    return r.table;
   } catch (e) {
-    pre.textContent = '读取失败：' + e.message;
+    box.innerHTML = `<div class="wr-pitem__err">读取失败：${esc(e.message)}</div>`;
+    return null;
   }
 }
 
@@ -783,7 +840,7 @@ function bindActions() {
   $('#btn-perf-view').onclick = () => {
     const cur = state.data && state.data.perf && state.data.perf.current;
     if (!cur) { toast('找不到本月绩效表路径', 'err'); return; }
-    void viewPerfTable(cur, true);
+    void viewPerfTable(cur, '#perf-view-out');
   };
   $('#btn-perf-open').onclick = () => {
     const cur = state.data && state.data.perf && state.data.perf.current;
@@ -800,23 +857,80 @@ function bindActions() {
   $('#btn-perf-check2').onclick = async () => {
     const btn = $('#btn-perf-check2');
     btn.disabled = true;
-    const pre = $('#perf-view-out');
-    if (pre) { pre.hidden = false; pre.textContent = '正在核对本月绩效表…'; }
+    const out = $('#perf-view-out');
+    if (out) {
+      out.hidden = false;
+      out.innerHTML = '<div class="wr-muted">正在核对本月绩效表…</div>';
+    }
     try {
       const r = await post('/api/perf-check', {});
-      if (pre) pre.textContent = r.out || '(无输出)';
+      if (out) {
+        out.innerHTML = `<pre class="wr-pre wr-pre--perf">${esc(r.out || '(无输出)')}</pre>`;
+      }
       toast(r.ok ? '绩效表核对通过' : '绩效表核对有提示，看下面的报告', r.ok ? 'ok' : 'err');
     } catch (e) {
-      if (pre) pre.textContent = '核对失败：' + e.message;
+      if (out) out.innerHTML = `<div class="wr-pitem__err">核对失败：${esc(e.message)}</div>`;
       toast('核对失败', 'err');
     } finally {
       btn.disabled = false;
       await refresh(true);
     }
   };
+  $('#btn-perf-tpl').onclick = async () => {
+    const btn = $('#btn-perf-tpl');
+    const out = $('#perf-view-out');
+    btn.disabled = true;
+    if (out) { out.hidden = false; out.innerHTML = '<div class="wr-muted">正在检查绩效表模板…</div>'; }
+    try {
+      const r = await api('/api/perf/template');
+      const rep = (r && r.report) || {};
+      const items = rep.items || [];
+      const errors = rep.errors || [];
+      const hints = rep.hints || [];
+      const rows = items.map((it) => `
+        <tr>
+          <td class="wr-ptable__item">${esc(it.name)}</td>
+          <td class="wr-ptable__when">${it.ok ? '可用' : '有问题'}</td>
+          <td class="wr-ptable__item">${esc((it.notes || []).join('；') || '—')}</td>
+        </tr>`).join('');
+      const html = `
+        <div class="wr-ptable__head">
+          <div class="wr-ptable__meta">
+            <span class="wr-ptable__name">绩效表模板自检</span>
+            <span class="wr-chip">目录 ${esc(rep.folder || '—')}</span>
+          </div>
+          <div class="wr-ptable__stats">
+            <span class="wr-chip ${rep.ok ? 'wr-chip--ok' : 'wr-chip--warn'}">${rep.ok ? '模板可用' : '需要准备模板'}</span>
+            <span class="wr-chip">${items.length} 张候选</span>
+          </div>
+        </div>
+        ${errors.length ? `<div class="wr-pitem__err">${errors.map(esc).join('<br/>')}</div>` : ''}
+        ${hints.length ? `<div class="wr-field__tip" style="margin-top:8px">${hints.map(esc).join('<br/>')}</div>` : ''}
+        ${rows ? `<div class="wr-ptable__wrap"><table class="wr-ptable">
+            <thead><tr><th>模板文件</th><th>状态</th><th>说明</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>` : ''}`;
+      if (out) out.innerHTML = html;
+      toast(rep.ok ? '模板可用' : '需要准备模板，看下面的说明', rep.ok ? 'ok' : 'err');
+    } catch (e) {
+      if (out) out.innerHTML = `<div class="wr-pitem__err">自检失败：${esc(e.message)}</div>`;
+      toast('自检失败', 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   $('#perf-archive-list').addEventListener('click', (e) => {
     const viewBtn = e.target.closest('[data-perf-view]');
-    if (viewBtn) { void viewPerfTable(viewBtn.dataset.perfView, true); return; }
+    if (viewBtn) {
+      const item = viewBtn.closest('[data-perf-item]');
+      const out = item && item.querySelector('.wr-pitem__view');
+      if (!out) return;
+      const open = out.hidden;
+      out.hidden = !open;
+      viewBtn.textContent = open ? '收起' : '查看';
+      if (open) void viewPerfTable(viewBtn.dataset.perfView, out);
+      return;
+    }
     const openBtn = e.target.closest('[data-perf-open]');
     if (openBtn) { void openDir(openBtn.dataset.perfOpen, '绩效表所在目录'); }
   });

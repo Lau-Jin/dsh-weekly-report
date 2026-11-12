@@ -836,6 +836,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 绩效表：模板自检（新装机器看"缺什么、怎么补"）
+    if (req.method === 'GET' && p === '/api/perf/template') {
+      const py = findPython();
+      const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--perf-template-check'],
+        { timeout: 90000, cwd: P.ENGINE_DIR });
+      const line = (r.out || '').trim().split(/\r?\n/).filter((l) => l.trim().startsWith('{')).pop();
+      let data = null;
+      try { data = JSON.parse(line || '{}'); } catch (_) { data = null; }
+      if (!data) {
+        json(res, 500, { ok: false, error: (r.out || '').slice(-400) || '模板自检失败' });
+        return;
+      }
+      json(res, 200, { ok: true, report: data });
+      return;
+    }
+
     // 绩效表：读取一张表的内容（面板里直接看，不用开 Excel）
     if (req.method === 'GET' && p === '/api/perf/table') {
       const target = String(url.searchParams.get('path') || '').trim();
