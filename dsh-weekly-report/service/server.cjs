@@ -531,6 +531,13 @@ function startRun(body) {
       if (a) {
         try { run.artifacts = JSON.parse(a[1]); } catch (_) { /* ignore */ }
       }
+      // 连不上研发平台时给一句能行动的话（本地网关没起是最常见原因）
+      if (/连接研发平台失败|MCP 初始化失败/.test(line)) {
+        const url = (getConfig().mcp_url || '');
+        run.error = url && /^https?:\/\/127\.0\.0\.1|^https?:\/\/localhost/.test(url)
+          ? `连不上研发平台（${url}）——本地网关没在运行，先把它起起来再生成`
+          : '连不上研发平台（检查 MCP 地址与 API Key）';
+      }
     }
     if (code !== 0 && !run.error) run.error = `退出码 ${code}`;
     log(`run finished code=${code} out=${run.outPath}`);
