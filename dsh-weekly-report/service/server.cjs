@@ -225,15 +225,27 @@ function openInExplorer(target) {
   let stat;
   try { stat = fs.statSync(full); } catch (_) { return { ok: false, error: '路径不存在' }; }
   const isFile = stat.isFile();
+  // 注意：这里**不能**加 windowsHide —— explorer.exe 是 shell 程序，带 windowsHide 启动时
+  // 窗口不会出现（实测：带 windowsHide 打开目录后资源管理器没有新窗口，去掉才有）。
+  // explorer.exe 本身是 GUI 子系统程序，不会有控制台窗口闪出来。
   try {
     const child = spawn('explorer.exe', isFile ? [`/select,${full}`] : [full], {
-      detached: true, stdio: 'ignore', windowsHide: true,
+      detached: true, stdio: 'ignore',
     });
     child.unref();
   } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
+    // 兜底：走 cmd 的 start（同样是 GUI 打开，不会留控制台）
+    try {
+      const alt = spawn('cmd.exe', ['/c', 'start', '', isFile ? path.dirname(full) : full], {
+        detached: true, stdio: 'ignore', windowsHide: true,
+      });
+      alt.unref();
+    } catch (_) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   }
-  return { ok: true, opened: full, selected: isFile };
+  // explorer.exe 交接到已有 shell 后自己退出，退出码 1 属正常，不代表失败
+  return { ok: true, opened: full, selected: isFile, app: 'explorer' };
 }
 
 // ---------------------------------------------------------------- 注意事项

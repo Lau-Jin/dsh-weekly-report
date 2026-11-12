@@ -64,6 +64,50 @@ def get(path, timeout=10):
     return (time.time() - t0) * 1000, body
 
 
+def post(path, body, timeout=20):
+    """POST JSON 到测试实例，返回 (状态码, 解析后的 JSON)。"""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode("utf-8"))
+
+
+def explorer_windows():
+    """当前 explorer 有标题的窗口标题列表（用来确认「打开目录」真的弹了窗口）。"""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "$OutputEncoding=[Text.Encoding]::UTF8; Get-Process explorer -ErrorAction SilentlyContinue "
+             "| Where-Object { $_.MainWindowTitle } | ForEach-Object { $_.MainWindowTitle }"],
+            capture_output=True, timeout=25,
+        )
+        out = r.stdout.decode("utf-8", "replace")
+        return [x.strip() for x in out.replace("\r\n", "\n").split("\n") if x.strip()]
+    except Exception:
+        return []
+
+
+def close_explorer_windows():
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } "
+             "| ForEach-Object { $_.CloseMainWindow() | Out-Null }"],
+            capture_output=True, timeout=25,
+        )
+    except Exception:
+        pass
+    time.sleep(1.2)
+
+
 def wait_up(seconds=25):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -217,6 +261,39 @@ def main():
         time.sleep(3.0)
         ps_after = ps_count()
         check("拉起/隐藏执行都没有额外 powershell 常驻", ps_after <= ps_base + 1, f"{ps_base} -> {ps_after}")
+        # 打开目录：接口放行 + **资源管理器真的弹窗**（windowsHide 会让窗口不出现）
+        if sys.platform == "win32":
+            out_dir = os.path.join(tmp, "weekly")
+            os.makedirs(os.path.join(out_dir, "2026年11月"), exist_ok=True)
+            sample = os.path.join(out_dir, "2026年11月", "周报_2026-11-09_2026-11-15.txt")
+            with open(sample, "w", encoding="utf-8") as f:
+                f.write("【项目运维】\n示例学校\n  进度：100%\n")
+            # 让测试实例的输出目录指向临时目录
+            cfg_path = os.path.join(data_dir, "config.json")
+            cfg = {"handler": "测试", "out_dir": out_dir, "folder": out_dir,
+                   "token_file": os.path.join(data_dir, "api-key.txt")}
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+
+            close_explorer_windows()
+            code, r = post("/api/open-dir", {"path": os.path.join(out_dir, "2026年11月")})
+            time.sleep(2.5)
+            titles = explorer_windows()
+            check("open-dir：目录内路径放行", code == 200 and r.get("ok") is True, f"{code} {r}")
+            check("open-dir：资源管理器真的弹出窗口",
+                  any("2026" in t or "月" in t for t in titles), f"windows={titles}")
+            close_explorer_windows()
+
+            code, r = post("/api/open-dir", {"path": sample})
+            time.sleep(2.5)
+            check("open-dir：文件路径也放行（打开所在目录并选中）",
+                  code == 200 and r.get("ok") is True and r.get("selected") is True, f"{code} {r}")
+            close_explorer_windows()
+
+            code, r = post("/api/open-dir", {"path": "C:/Windows"})
+            check("open-dir：输出目录外被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
+            code, r = post("/api/open-dir", {})
+            check("open-dir：空路径被拒绝", code == 400 and r.get("ok") is False, f"{code} {r}")
     finally:
         # 收拾：先按 ping 报的 pid 精确杀掉（watchdog 拉起的那个进程是 detached 的）
         try:
