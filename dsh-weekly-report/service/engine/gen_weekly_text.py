@@ -927,6 +927,9 @@ def build_items_from_tickets(tickets, worklogs, handler, ws, we, my_task_ids=Non
             "source": "我处理" if is_mine else ("我记工时" if p_dates else "任务我负责"),
             "settled": completed_in_period,
             "done": completed_in_period,
+            # 工时落在哪些天（分周归属用：一条只属于它真正干过活的那些周）
+            "work_dates": [d.isoformat() for d in p_dates],
+            "created": created.isoformat() if created else "",
         })
 
     items.sort(key=lambda x: (x["d1"], x["school"], x["subject"]))
@@ -1459,6 +1462,8 @@ def build_items_from_tasks(tasks, worklogs, handler, ws, we,
             "source": "我负责" if is_owner else "任务我记工时",
             "settled": completed_in_period,
             "done": completed_in_period,
+            "work_dates": [d.isoformat() for d in p_dates],
+            "created": created.isoformat() if created else "",
         })
 
     items.sort(key=lambda x: (x["d1"], x["school"], x["subject"]))
@@ -1670,8 +1675,21 @@ def perf_template_report(folder, handler="张三", year=None, month=None):
     return out
 
 
+def _perf_date_text(v):
+    """把单元格里的日期按表里的显示格式转成文本（yyyy/m/d 之类）。"""
+    if v is None or v == "":
+        return ""
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y/%m/%d")
+    return str(v)
+
+
 def perf_dump(path):
-    """把绩效表读成可展示的结构（JSON 友好）：基本信息 + 任务区每一行。"""
+    """把绩效表读成可展示的结构（JSON 友好）：基本信息 + 任务区每一行。
+
+    字段与表里的列一一对应：
+      类别(B) / 任务名称(D) / 开始时间(J) / 结束时间(K) / 是否完成(L) / 评定(M)
+    """
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = perf_sheet(wb)
@@ -1685,18 +1703,28 @@ def perf_dump(path):
             "content": r.get("content") or "",
             "d1": d1.isoformat() if d1 else "",
             "d2": d2.isoformat() if d2 else "",
+            "d1_text": _perf_date_text(d1),
+            "d2_text": _perf_date_text(d2),
             "settled": bool(r.get("settled")),
             "note": (r.get("note") or "") if isinstance(r.get("note"), str) else "",
         })
     done_n = sum(1 for it in items if it["settled"])
+    # 表头行（第 6 行）的列名，让面板能照抄表里的叫法
+    headers = []
+    for c in (PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL, PERF_END_COL,
+              PERF_DONE_COL, PERF_NOTE_COL):
+        v = ws.cell(6, c).value
+        headers.append(str(v).strip() if isinstance(v, str) and v.strip() else "")
     return {
         "path": os.path.abspath(path),
         "name": os.path.basename(path),
         "sheet": ws.title,
         "handler": str(ws.cell(3, 4).value or ""),
+        "dept": str(ws.cell(3, 8).value or ""),
         "period": str(ws.cell(4, 4).value or ""),
         "filled_at": (ws.cell(3, 11).value.isoformat()
                       if hasattr(ws.cell(3, 11).value, "isoformat") else ""),
+        "headers": headers,
         "rows": items,
         "total": len(items),
         "done": done_n,
@@ -2517,6 +2545,38 @@ def current_week(today=None):
     return monday, monday + timedelta(days=6)
 
 
+def weeks_in_range(start, end):
+    """把 [start, end] 拆成若干个自然周（周一~周日），每段裁剪到区间内。
+
+    周期语义：**区间内每一周各出一份周报**，不是一个区间出一份。
+    """
+    if end < start:
+        start, end = end, start
+    out = []
+    cur = start
+    while cur <= end:
+        monday = cur - timedelta(days=cur.weekday())
+        sunday = monday + timedelta(days=6)
+        s = max(start, monday)
+        e = min(end, sunday)
+        out.append((s, e))
+        cur = sunday + timedelta(days=1)
+    return out
+
+
+def month_range(year, month):
+    """整月：1 日 ~ 最后一天。"""
+    last = date(year + (1 if month == 12 else 0), (month % 12) + 1, 1) - timedelta(days=1)
+    return date(year, month, 1), last
+
+
+def last_month_range(today=None):
+    """上个月（相对今天）。"""
+    today = today or _today_cn()
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    return month_range(y, m)
+
+
 def auto_pick_xlsx(folder, target_date):
     """在考核表目录里挑出目标日期所在月份的文件；没有则用最新的一个。
 
@@ -2765,20 +2825,61 @@ def meta_path_for(report_path):
     return os.path.splitext(report_path)[0] + "_meta.json"
 
 
-def render_report(items):
-    lines = []
-    for it in items:
-        lines.extend([
-            f"【{it['category']}】",
-            it["school"],
-            f"  时间: {it['time']}",
-            f"  事项: {it['subject']}",
-            f"  工作内容：{it['work']}",
-            f"  重要说明：{it.get('note') or '无'}",
-            f"  进度：{it['progress']}",
-            "",
-        ])
-    return "\n".join(lines).rstrip() + "\n"
+# 周报模板：默认格式（插件里的 templates/周报模板.txt 与此一致）
+DEFAULT_REPORT_TEMPLATE = """【{{category}}】
+{{school}}
+  时间: {{time}}
+  事项: {{subject}}
+  工作内容：{{work}}
+  重要说明：{{note}}
+  进度：{{progress}}
+"""
+
+_TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+
+
+def load_report_template(custom_path=None):
+    """取周报模板：命令行指定 > 插件自带 templates/周报模板.txt > 内置默认。"""
+    cands = []
+    if custom_path:
+        cands.append(custom_path)
+    cands.append(os.path.join(_TEMPLATE_DIR, "周报模板.txt"))
+    for path in cands:
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    text = f.read().strip("\n")
+                if text.strip():
+                    print(f"周报模板：{path}")
+                    return text
+            except Exception as e:
+                print(f"提示：读取周报模板失败（{path}）：{e}；改用内置默认格式")
+    print("周报模板：内置默认格式")
+    return DEFAULT_REPORT_TEMPLATE
+
+
+def render_item(template, it):
+    """按模板渲染一条周报条目（占位符 {{字段}}）。"""
+    fields = {
+        "category": it.get("category") or "",
+        "school": it.get("school") or "",
+        "time": it.get("time") or "",
+        "subject": it.get("subject") or "",
+        "work": it.get("work") or "",
+        "note": it.get("note") or "无",
+        "progress": it.get("progress") or "",
+    }
+    out = template
+    for key, val in fields.items():
+        out = out.replace("{{" + key + "}}", str(val))
+    return out.rstrip("\n")
+
+
+def render_report(items, template=None):
+    """按模板渲染整份周报（一条一个块，块之间空一行）。"""
+    tpl = template or DEFAULT_REPORT_TEMPLATE
+    blocks = [render_item(tpl, it) for it in items]
+    return "\n\n".join(blocks).rstrip() + "\n"
 
 
 def misses_from_meta(meta, handler=""):
@@ -3214,6 +3315,9 @@ def main():
     ap.add_argument("--start")
     ap.add_argument("--end")
     ap.add_argument("--week", help="填 current 表示自动取本周（周一~周日）")
+    ap.add_argument("--month", help="生成整月 YYYY-MM：按周拆成多份周报 + 该月绩效表")
+    ap.add_argument("--last-month", action="store_true", help="生成上个月（整月）")
+    ap.add_argument("--report-template", help="周报模板文件（txt，含 {{字段}} 占位符）")
     ap.add_argument("--folder", help="考核表目录（默认读配置）")
     ap.add_argument("--auto-file", action="store_true", help="按周期自动挑选当月考核表")
     ap.add_argument("--out", help="不传则按周期自动归档到配置的输出目录")
@@ -3420,14 +3524,41 @@ def main():
         print(f"已写出 {target}（{len(out['tools'])} 个工具）")
         return
 
-    if args.week == "current" or args.start == "current":
+    # 周期语义：先算出一组「自然周」，每段出一份周报
+    #   --week current      → 本周
+    #   --week last         → 上周
+    #   --last-month        → 上个月（整月，按周拆）
+    #   --month YYYY-MM     → 那个月（整月，按周拆）
+    #   --start/--end       → 指定区间内**每一周**各一份
+    periods = []
+    if args.last_month:
+        s0, e0 = last_month_range()
+        periods = weeks_in_range(s0, e0)
+        print(f"上个月：{s0} ~ {e0}（按周拆成 {len(periods)} 份周报）")
+    elif args.month:
+        y0 = int(args.month.split("-")[0])
+        m0 = int(args.month.split("-")[1])
+        s0, e0 = month_range(y0, m0)
+        periods = weeks_in_range(s0, e0)
+        print(f"{y0}年{m0}月：{s0} ~ {e0}（按周拆成 {len(periods)} 份周报）")
+    elif args.week == "current" or args.start == "current":
         ws, we = current_week()
+        periods = [(ws, we)]
         print(f"本周：{ws} ~ {we}")
+    elif args.week == "last":
+        ws0, we0 = current_week()
+        periods = [(ws0 - timedelta(days=7), we0 - timedelta(days=7))]
+        print(f"上周：{periods[0][0]} ~ {periods[0][1]}")
     else:
         if not (args.start and args.end):
             ap.error("需要 --start/--end，或 --week current")
         ws = datetime.strptime(args.start, "%Y-%m-%d").date()
         we = datetime.strptime(args.end, "%Y-%m-%d").date()
+        periods = weeks_in_range(ws, we)
+        if len(periods) > 1:
+            print(f"区间 {ws} ~ {we}：按周拆成 {len(periods)} 份周报")
+        else:
+            print(f"区间 {ws} ~ {we}")
 
     if args.source == "tickets":
         token_arg = args.mcp_token
@@ -3438,46 +3569,111 @@ def main():
             raise SystemExit("工单模式需要 API Key：--mcp-token 或 api_key.txt")
         token = resolve_token(token_arg)
         data_args = json.loads(args.mcp_args) if args.mcp_args else {}
-        items = collect_items(token, mcp_url, handler, ws, we,
-                              mcp_tool=args.mcp_tool, mcp_args=data_args,
-                              with_tasks=not args.no_tasks)
+        rpt_template = load_report_template(args.report_template or (cfg.get("report_template") or "").strip() or None)
 
-        out_path = args.out or default_out_path(ws, we)
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        text = render_report(items)
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        print(f"OK {len(items)} 条 out={out_path}")
+        artifacts = {"reports": [], "perf": [], "weeks": []}
+        perf_months = {}
 
-        miss_path = os.path.splitext(out_path)[0] + "_未匹配.txt"
-        if os.path.isfile(miss_path):
-            os.remove(miss_path)
+        # 一次采集覆盖整个区间，再按周拆分——多周时不用反复调接口
+        span_start = min(p[0] for p in periods)
+        span_end = max(p[1] for p in periods)
+        all_items = collect_items(token, mcp_url, handler, span_start, span_end,
+                                  mcp_tool=args.mcp_tool, mcp_args=data_args,
+                                  with_tasks=not args.no_tasks)
+        print(f"已采集 {span_start} ~ {span_end}：{len(all_items)} 条")
 
-        perf_out = args.perf_xlsx
-        if perf_out or args.perf_auto:
-            if args.perf_month:
-                y, m = [int(x) for x in args.perf_month.split("-")]
-            else:
-                y, m = we.year, we.month
-                if (ws.year, ws.month) != (we.year, we.month):
-                    print(f"注意：周期跨月，绩效文档按 {y}年{m}月 生成"
-                          f"（可用 --perf-month 指定）")
-            if not perf_out:
-                perf_out = perf_path_for(folder, handler, y, m)
-            if not os.path.isdir(folder):
-                print(f"提示：绩效目录不存在（{folder}），本次跳过绩效文档")
-            else:
+        def _d(v):
+            try:
+                return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+            except Exception:
+                return None
+
+        def items_of_week(week_start, week_end):
+            """把采集结果分到某一周。
+
+            归属按**工时落在哪一周**：一条在多周有工时就多周都出现（它确实跨周），
+            但每份周报里的时间只算本周的工时，不会把整段区间都写进去。
+            没有工时的（本期新建）按建单日归属。
+            """
+            out = []
+            for it in all_items:
+                dates = [_d(x) for x in (it.get("work_dates") or [])]
+                dates = [x for x in dates if x]
+                in_week = [x for x in dates if week_start <= x <= week_end]
+                if not in_week:
+                    created = _d(it.get("created"))
+                    if created is None or not (week_start <= created <= week_end):
+                        continue
+                    out.append(dict(it))
+                    continue
+                w1, w2 = min(in_week), max(in_week)
+                copy = dict(it)
+                copy["d1"] = w1.isoformat()
+                copy["d2"] = w2.isoformat()
+                copy["time"] = fmt_range(w1, w2)
+                # 这一周之后还有没有工时？没有 → 这一周就是它收口的那周（算完成）
+                later = [x for x in dates if x > week_end]
+                copy["settled"] = (not later) and bool(it.get("work_dates"))
+                copy["done"] = copy["settled"]
+                if copy["settled"]:
+                    copy["progress"] = "100%"
+                out.append(copy)
+            out.sort(key=lambda x: (x.get("d1") or "", x.get("school") or "", x.get("subject") or ""))
+            return out
+
+        # 每一段（周）各出一份周报
+        for (ws, we) in periods:
+            items = items_of_week(ws, we)
+
+            out_path = args.out or default_out_path(ws, we)
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+            text = render_report(items, rpt_template)
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            print(f"OK {len(items)} 条 out={out_path}")
+            artifacts["reports"].append({
+                "path": out_path, "name": os.path.basename(out_path),
+                "start": str(ws), "end": str(we), "count": len(items),
+            })
+            artifacts["weeks"].append({"start": str(ws), "end": str(we), "count": len(items)})
+
+            miss_path = os.path.splitext(out_path)[0] + "_未匹配.txt"
+            if os.path.isfile(miss_path):
+                os.remove(miss_path)
+
+            # 绩效表：按涉及的月份累积（跨月的周各归各月）
+            for (my, mm) in sorted({(ws.year, ws.month), (we.year, we.month)}):
+                perf_months.setdefault((my, mm), []).append((ws, we, items))
+
+        # ---- 绩效表：每个月一份，把该月各周的内容都并进去 ----
+        if args.perf_xlsx or args.perf_auto:
+            for (y, m), segs in sorted(perf_months.items()):
+                if args.perf_month:
+                    py_, pm_ = [int(x) for x in args.perf_month.split("-")]
+                    if (py_, pm_) != (y, m):
+                        continue
+                perf_out = args.perf_xlsx or perf_path_for(folder, handler, y, m)
+                if not os.path.isdir(folder):
+                    print(f"提示：绩效目录不存在（{folder}），本次跳过绩效文档")
+                    continue
                 ms = date(y, m, 1)
-                me = (date(y + (1 if m == 12 else 0), (m % 12) + 1, 1)
-                      - timedelta(days=1))
-                full_month = not (ms <= ws and we <= me)
-                if full_month:
-                    m_items = collect_items(token, mcp_url, handler, ms, me,
-                                            mcp_tool=args.mcp_tool,
-                                            mcp_args=data_args,
-                                            with_tasks=not args.no_tasks)
-                else:
-                    m_items = items
+                me = (date(y + (1 if m == 12 else 0), (m % 12) + 1, 1) - timedelta(days=1))
+                # 该月所有周的条目合并（去重由 build_perf_xlsx 负责）
+                m_items = []
+                for (ws, we, its) in segs:
+                    m_items.extend(its)
+                # 该月若不在采集区间内（例如只生成本月但要写上月表），补一次
+                covered = ms >= span_start and me <= span_end
+                if not covered:
+                    extra = collect_items(token, mcp_url, handler, ms, me,
+                                         mcp_tool=args.mcp_tool, mcp_args=data_args,
+                                         with_tasks=not args.no_tasks)
+                    have = {(i.get("school"), i.get("subject")) for i in m_items}
+                    for i in extra:
+                        if (i.get("school"), i.get("subject")) not in have:
+                            m_items.append(i)
+                full_month = not covered
+
                 if args.perf_template:
                     tpl = args.perf_template
                 elif os.path.isfile(perf_out):
@@ -3485,22 +3681,24 @@ def main():
                 else:
                     tpl = auto_pick_xlsx(folder, ms)
                 if not tpl or not os.path.isfile(tpl):
-                    # 没有模板（新机器的绩效表目录是空的）：周报照常生成，只是不写绩效表
                     print(f"提示：绩效表目录里还没有可用的模板（{folder}），本次不写绩效表；"
                           f"把一张月度考核表放进该目录即可自动套用")
-                    tpl = None
-                if tpl:
-                    built = build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
+                    continue
+                built = build_perf_xlsx(tpl, perf_out, m_items, y, m, handler)
+                artifacts["perf"].append({
+                    "path": built, "name": os.path.basename(built),
+                    "year": y, "month": m, "count": len(m_items),
+                })
 
                 # 自检：对照本月各周周报补齐缺失；本周覆盖月末时就是月底核对
-                if tpl:
-                    month_end_week = we >= me - timedelta(days=6)
-                    perf_check_report(built, y, m, handler, fix=True,
-                                      platform_items=(m_items if full_month else None))
-                    if month_end_week:
-                        print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
+                month_end_week = any(we >= me - timedelta(days=6) for (_a, we, _b) in segs)
+                perf_check_report(built, y, m, handler, fix=True,
+                                  platform_items=(m_items if full_month else None))
+                if month_end_week:
+                    print(f"（本轮已覆盖 {y}年{m}月月末，上面就是月底核对报告）")
 
-                # 上个月的绩效表若还没核对过，顺手补一次（纯文本比对，不额外调接口）
+            # 上个月的绩效表若还没核对过，顺手补一次（纯文本比对，不额外调接口）
+            for (y, m) in sorted(perf_months):
                 py_, pm_ = (y - 1, 12) if m == 1 else (y, m - 1)
                 prev_out = perf_path_for(folder, handler, py_, pm_)
                 if (os.path.isfile(prev_out)
@@ -3508,22 +3706,33 @@ def main():
                     print(f"上个月（{py_}年{pm_}月）绩效表还没有核对报告，补一次核对")
                     perf_check_report(prev_out, py_, pm_, handler, fix=True)
 
+        # 产物清单（面板按这个分「周报 / 绩效表」两块展示）
+        print("ARTIFACTS_JSON " + json.dumps(artifacts, ensure_ascii=False))
+
         n = _notify_cfg(cfg)
         if args.notify or n["enabled"]:
-            total = len(items)
-            schools = len({i["school"] for i in items})
-            mine = sum(1 for i in items if i.get("source") == "我处理")
-            wl_n = sum(1 for i in items if i.get("source") == "我记工时")
-            task_n = sum(1 for i in items
-                         if i.get("source") in ("我负责", "任务我记工时", "任务我负责"))
-            summary = (f"{ws} ~ {we}：工单/任务 {total} 条，涉及 {schools} 所学校"
-                       f"（我处理 {mine} 条，我记工时 {wl_n} 条，任务中心 {task_n} 条）")
-            subject = f"【周报】{ws} ~ {we}（{total} 条）"
-            body = "\n".join([f"周期：{ws} ~ {we}", summary, "",
-                              "========== 周报正文 ==========", text.rstrip(), "",
-                              f"文件：{out_path}"])
-            html = build_mail_html(f"{ws} ~ {we}", summary, text.rstrip(), "")
-            webhook_body = "\n".join([summary, f"周报：{out_path}"])
+            total = sum(a["count"] for a in artifacts["weeks"])
+            schools = len({i["school"] for a in artifacts["weeks"] for i in []}) or 0
+            first = artifacts["weeks"][0] if artifacts["weeks"] else None
+            last = artifacts["weeks"][-1] if artifacts["weeks"] else None
+            span = (f"{first['start']} ~ {last['end']}" if first and last
+                    else (first["start"] if first else "-"))
+            summary = f"{span}：共 {len(artifacts['reports'])} 份周报 / {total} 条事项"
+            subject = f"【周报】{span}（{total} 条 / {len(artifacts['reports'])} 份）"
+            body_lines = [f"周期：{span}", summary, ""]
+            for a in artifacts["reports"]:
+                body_lines.append(f"周报 {a['start']}~{a['end']}：{a['count']} 条  {a['path']}")
+            if artifacts["perf"]:
+                body_lines.append("")
+                for a in artifacts["perf"]:
+                    body_lines.append(f"绩效表 {a['year']}年{a['month']}月：{a['count']} 条  {a['path']}")
+            body = "\n".join(body_lines)
+            html = build_mail_html(span, summary, "\n".join(
+                [f"{a['start']}~{a['end']}：{a['count']} 条" for a in artifacts["reports"]]),
+                "\n".join([f"{a['year']}年{a['month']}月绩效表 {a['count']} 条" for a in artifacts["perf"]]))
+            webhook_body = "\n".join([summary] +
+                [f"周报：{a['path']}" for a in artifacts["reports"]] +
+                [f"绩效表：{a['path']}" for a in artifacts["perf"]])
             notify(cfg, subject, body, dry_run=args.notify_dry_run,
                    html=html, webhook_body=webhook_body)
         return

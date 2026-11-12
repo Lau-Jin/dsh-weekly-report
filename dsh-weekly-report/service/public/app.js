@@ -250,6 +250,7 @@ function perfTableHtml(tbl) {
         <span class="wr-ptable__name">${esc(tbl.name || '')}</span>
         <span class="wr-chip">考核期间 ${esc(tbl.period || '—')}</span>
         <span class="wr-chip">处理人 ${esc(tbl.handler || '—')}</span>
+        ${tbl.dept ? `<span class="wr-chip">${esc(tbl.dept)}</span>` : ''}
         ${tbl.filled_at ? `<span class="wr-chip">填报 ${esc(String(tbl.filled_at).replace('T', ' ').slice(0, 16))}</span>` : ''}
       </div>
       <div class="wr-ptable__stats">
@@ -262,22 +263,53 @@ function perfTableHtml(tbl) {
     return head + '<div class="wr-empty">这张表的任务区还没有内容</div>';
   }
   const body = rows.map((r) => {
-    const when = r.d1 === r.d2 ? (r.d1 || '—') : `${r.d1 || '—'} ~ ${r.d2 || '—'}`;
+    const d1 = r.d1_text || r.d1 || '—';
+    const d2 = r.d2_text || r.d2 || '—';
     return `<tr>
       <td class="wr-ptable__cat">${esc(r.category || '')}</td>
       <td class="wr-ptable__item">${esc(r.content || '')}${r.note ? `<div class="wr-ptable__note">${esc(r.note)}</div>` : ''}</td>
-      <td class="wr-ptable__when">${esc(when)}</td>
+      <td class="wr-ptable__when">${esc(d1)}</td>
+      <td class="wr-ptable__when">${esc(d2)}</td>
       <td class="wr-ptable__done"><span class="wr-pill ${r.settled ? 'wr-pill--ok' : 'wr-pill--warn'}">${r.settled ? '是' : '否'}</span></td>
     </tr>`;
   }).join('');
+  // 表头照抄表里的列名（类别 / 任务名称 / 开始时间 / 结束时间 / 是否完成）
+  const hs = tbl.headers || [];
+  const h = (i, fb) => esc(hs[i] || fb);
   return head + `<div class="wr-ptable__wrap"><table class="wr-ptable">
       <colgroup>
         <col class="wr-ptable__col-cat" /><col class="wr-ptable__col-item" />
-        <col class="wr-ptable__col-when" /><col class="wr-ptable__col-done" />
+        <col class="wr-ptable__col-when" /><col class="wr-ptable__col-when" />
+        <col class="wr-ptable__col-done" />
       </colgroup>
-      <thead><tr><th>类别</th><th>事项</th><th>起止时间</th><th>是否完成</th></tr></thead>
+      <thead><tr><th>${h(0, '类别')}</th><th>${h(1, '任务名称')}</th><th>${h(2, '开始时间')}</th><th>${h(3, '结束时间')}</th><th>${h(4, '是否完成')}</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>`;
+}
+
+const PERIOD_TIPS = {
+  current: '生成**本周**（周一~周日）一份周报，并写入本月绩效表。',
+  last: '生成**上周**（周一~周日）一份周报，并写入本月绩效表。',
+  lastMonth: '生成**上个月**的周报：该月每一周各一份（共 4~5 份），并写入上个月的绩效表。',
+  range: '生成指定区间内**每一周**各一份周报（区间跨几周就有几份），涉及的每个月各写一份绩效表。',
+};
+
+/** 周期语义提示（说清楚"这一趟会生成什么"）。 */
+function renderPeriodTip(period) {
+  const el = $('#period-tip');
+  if (!el) return;
+  el.innerHTML = PERIOD_TIPS[period] || PERIOD_TIPS.current;
+}
+
+/** 周报模板：显示当前用的模板路径。 */
+function renderReportTemplate(info) {
+  const box = $('#rpt-tpl-path');
+  const hint = $('#rpt-tpl-hint');
+  if (!box) return;
+  const tpl = (info && info.report) || '';
+  const custom = (info && info.reportCustom) || '';
+  box.textContent = tpl || '（未找到模板文件，使用内置默认格式）';
+  if (hint) hint.textContent = custom ? '已用自定义模板' : '插件自带模板';
 }
 
 function renderPerf(perf) {
@@ -316,7 +348,13 @@ function renderPerf(perf) {
   renderPerfArchive(tables.filter((t) => t.path !== current), current);
 }
 
-/** 往月的绩效表：按所在目录（年份）收拢，点「查看」就在那一条下面展开内容。 */
+/** 往月绩效表：按目录（年份）收拢。
+
+ * 展开状态记在模块级变量里 —— 页面每 15 秒轮询一次会重画这张卡，
+ * 不记住的话用户刚点开就被收起了（"在查看某月绩效表中，会自动收起"）。
+ */
+const perfOpen = { groups: new Set(), items: new Set() };
+
 function renderPerfArchive(tables, current) {
   const archive = $('#perf-archive');
   const list = $('#perf-archive-list');
@@ -335,27 +373,53 @@ function renderPerfArchive(tables, current) {
   list.innerHTML = keys.map((key) => {
     const items = groups.get(key);
     const label = key === '.' ? '根目录' : key;
-    return `<details class="wr-pgroup" open>
+    const open = perfOpen.groups.has(key);
+    return `<details class="wr-pgroup" data-perf-group="${esc(key)}"${open ? ' open' : ''}>
       <summary class="wr-pgroup__head">
         <span class="wr-pgroup__name">${esc(label)}</span>
         <span class="wr-pgroup__count">${items.length} 张</span>
       </summary>
       <div class="wr-pgroup__body">
-        ${items.map((t) => `
+        ${items.map((t) => {
+          const isOpen = perfOpen.items.has(t.path);
+          return `
           <div class="wr-pitem" data-perf-item="${esc(t.path)}">
             <div class="wr-rep">
               <div style="min-width:0;flex:1 1 auto">
                 <div class="wr-rep__name" style="font-size:12px">${esc(t.name)}</div>
                 <div class="wr-rep__sub">${fmtSize(t.size)} · ${esc(fmtTime(t.mtime))}</div>
               </div>
-              <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">查看</button>
+              <button class="wr-btn wr-btn--ghost" data-perf-view="${esc(t.path)}">${isOpen ? '收起' : '查看'}</button>
               <button class="wr-btn wr-btn--ghost" data-perf-open="${esc(t.dirAbs || '')}">打开目录</button>
             </div>
-            <div class="wr-pitem__view" hidden></div>
-          </div>`).join('')}
+            <div class="wr-pitem__view"${isOpen ? '' : ' hidden'}></div>
+          </div>`;
+        }).join('')}
       </div>
     </details>`;
   }).join('');
+}
+
+/** 展开某张往月表：内容就地展开（限高滚动，不把下面的目录顶走），并滚到它那一行。 */
+async function togglePerfItem(path, btn) {
+  const item = btn.closest('[data-perf-item]');
+  if (!item) return;
+  const out = item.querySelector('.wr-pitem__view');
+  if (!out) return;
+  const open = out.hidden;
+  if (open) {
+    perfOpen.items.add(path);
+    out.hidden = false;
+    btn.textContent = '收起';
+    // 滚到这一条，让人看到自己在看哪一张（不跳到页面最上面）
+    try { item.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) { /* ignore */ }
+    await viewPerfTable(path, out);
+  } else {
+    perfOpen.items.delete(path);
+    out.hidden = true;
+    out.innerHTML = '';
+    btn.textContent = '查看';
+  }
 }
 
 /** 读一张绩效表并渲染（容器可以是本月卡的输出区，也可以是某一条往月表下面的展开区）。 */
@@ -493,6 +557,42 @@ function setLogState(run) {
   text.textContent = run.exitCode === 0 ? '生成完成' : `已结束（退出码 ${run.exitCode}）`;
 }
 
+/** 生成结果：周报 / 绩效表 两个模块分别列出本次产物。 */
+function renderResult(run) {
+  const card = $('#result-card');
+  if (!card) return;
+  const art = (run && run.artifacts) || { reports: [], perf: [], weeks: [] };
+  const reports = art.reports || [];
+  const perf = art.perf || [];
+  if (!reports.length && !perf.length) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const repBox = $('#result-reports');
+  repBox.innerHTML = reports.length ? reports.map((a) => `
+    <div class="wr-res__item">
+      <div style="min-width:0;flex:1 1 auto">
+        <div class="wr-res__name">${esc(a.name)}</div>
+        <div class="wr-res__sub">${esc(a.start)} ~ ${esc(a.end)} · ${a.count} 条</div>
+      </div>
+      <button class="wr-btn wr-btn--ghost" data-view="${esc(a.path)}">查看</button>
+      <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
+    </div>`).join('') : '<div class="wr-muted">本次没有生成周报</div>';
+
+  const perfBox = $('#result-perf');
+  perfBox.innerHTML = perf.length ? perf.map((a) => `
+    <div class="wr-res__item">
+      <div style="min-width:0;flex:1 1 auto">
+        <div class="wr-res__name">${esc(a.name)}</div>
+        <div class="wr-res__sub">${a.year}年${a.month}月 · ${a.count} 条</div>
+      </div>
+      <button class="wr-btn wr-btn--ghost" data-perf-view2="${esc(a.path)}">查看</button>
+      <button class="wr-btn wr-btn--ghost" data-open-dir="${esc(a.path)}" title="打开所在目录">打开目录</button>
+    </div>`).join('') : '<div class="wr-muted">本次没有写绩效表（可看「模板自检」：目录里可能还没有模板）</div>';
+
+  const hint = $('#result-hint');
+  if (hint) hint.textContent = `${reports.length} 份周报 · ${perf.length} 份绩效表`;
+}
+
 function renderRun(run) {
   const running = !!(run && run.running);
   $('#btn-run').disabled = running;
@@ -504,6 +604,18 @@ function renderRun(run) {
       : run && run.exitCode != null
         ? `上次退出码 ${run.exitCode}`
         : '';
+  // 运行中提示会说明这趟会生成什么（周期语义）
+  const tipEl = $('#run-tip');
+  if (tipEl) {
+    const art = (run && run.artifacts) || {};
+    const nRep = (art.reports || []).length;
+    const nPerf = (art.perf || []).length;
+    tipEl.innerHTML = running
+      ? '按所选周期生成：周报（每周一份）+ 涉及的绩效表；结果在下方两个模块里'
+      : (nRep || nPerf)
+        ? `上次生成：${nRep} 份周报、${nPerf} 份绩效表`
+        : '';
+  }
   if (run && run.lines && run.lines.length) {
     const pre = $('#run-log');
     const text = run.lines.join('\n');
@@ -522,6 +634,7 @@ function renderRun(run) {
     }
   }
   setLogState(run);
+  renderResult(run);
 
   clearInterval(state.elapsedTimer);
   if (running) {
@@ -539,6 +652,7 @@ function applyState(data) {
   renderNotes(data.notes || []);
   renderReports(data.reports || []);
   renderPerf(data.perf);
+  renderReportTemplate(data.templates);
   fillConfig(data.config || {}, data.key);
   renderRun(data.run);
 }
@@ -611,8 +725,10 @@ function bindPeriodSeg() {
       $$('#period-seg button').forEach((x) => x.classList.toggle('is-active', x === b));
       $('#period').value = b.dataset.period;
       $('#range-wrap').hidden = b.dataset.period !== 'range';
+      renderPeriodTip(b.dataset.period);
     };
   });
+  renderPeriodTip($('#period').value || 'current');
 }
 
 function bindNoteFilter() {
@@ -837,10 +953,21 @@ function bindActions() {
   }
 
   // 绩效表：查看 / 打开目录 / 核对
+  let perfViewOpen = false;
   $('#btn-perf-view').onclick = () => {
     const cur = state.data && state.data.perf && state.data.perf.current;
     if (!cur) { toast('找不到本月绩效表路径', 'err'); return; }
-    void viewPerfTable(cur, '#perf-view-out');
+    const out = $('#perf-view-out');
+    const btn = $('#btn-perf-view');
+    if (perfViewOpen) {                       // 再点一次收起
+      perfViewOpen = false;
+      btn.textContent = '查看绩效表';
+      if (out) { out.hidden = true; out.innerHTML = ''; }
+      return;
+    }
+    perfViewOpen = true;
+    btn.textContent = '收起绩效表';
+    void viewPerfTable(cur, out);
   };
   $('#btn-perf-open').onclick = () => {
     const cur = state.data && state.data.perf && state.data.perf.current;
@@ -848,11 +975,6 @@ function bindActions() {
     // 用所在目录（文件在年份子目录里）
     const dir = cur.replace(/[\\/][^\\/]*$/, '');
     void openDir(dir, '绩效表所在目录');
-  };
-  $('#btn-perf-root').onclick = () => {
-    const root = (state.data && state.data.perf && state.data.perf.root) || '';
-    if (!root) { toast('未配置绩效表目录', 'err'); return; }
-    void openDir(root, '绩效表目录');
   };
   $('#btn-perf-check2').onclick = async () => {
     const btn = $('#btn-perf-check2');
@@ -919,21 +1041,38 @@ function bindActions() {
     }
   };
 
+  $('#btn-rpt-tpl-open').onclick = () => {
+    const dir = (state.data && state.data.paths && state.data.paths.outDir) || '';
+    if (!dir) { toast('未找到周报输出目录', 'err'); return; }
+    void openDir(dir, '周报输出目录');
+  };
+
+  $('#result-card').addEventListener('click', (e) => {
+    const viewBtn = e.target.closest('[data-view]');
+    if (viewBtn) { void openReport(viewBtn.dataset.view); return; }
+    const perfBtn = e.target.closest('[data-perf-view2]');
+    if (perfBtn) { void viewPerfTable(perfBtn.dataset.perfView2, '#perf-view-out'); return; }
+    const dirBtn = e.target.closest('[data-open-dir]');
+    if (dirBtn) {
+      const p = dirBtn.dataset.openDir || '';
+      void openDir(p.replace(/[\\/][^\\/]*$/, ''), '所在目录');
+    }
+  });
+
   $('#perf-archive-list').addEventListener('click', (e) => {
     const viewBtn = e.target.closest('[data-perf-view]');
-    if (viewBtn) {
-      const item = viewBtn.closest('[data-perf-item]');
-      const out = item && item.querySelector('.wr-pitem__view');
-      if (!out) return;
-      const open = out.hidden;
-      out.hidden = !open;
-      viewBtn.textContent = open ? '收起' : '查看';
-      if (open) void viewPerfTable(viewBtn.dataset.perfView, out);
-      return;
-    }
+    if (viewBtn) { void togglePerfItem(viewBtn.dataset.perfView, viewBtn); return; }
     const openBtn = e.target.closest('[data-perf-open]');
     if (openBtn) { void openDir(openBtn.dataset.perfOpen, '绩效表所在目录'); }
   });
+  // 分组展开状态也记住（重画后恢复）
+  $('#perf-archive-list').addEventListener('toggle', (e) => {
+    const det = e.target.closest('[data-perf-group]');
+    if (!det) return;
+    const key = det.dataset.perfGroup;
+    if (det.open) perfOpen.groups.add(key);
+    else perfOpen.groups.delete(key);
+  }, true);
 
   // 绩效表核对：对照本月各周周报，缺的事项自动补进当月表
   $('#btn-perf-check').onclick = async () => {
@@ -1247,7 +1386,7 @@ function runLayoutDiag() {
 
 // 测试用：?diag=1 时把几个渲染函数挂到 window，方便验证「没有路径就没有开关」这类边界
 if (new URLSearchParams(location.search).has('diag')) {
-  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, renderRun, renderPerf, pathShown, syncPathToggles };
+  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, renderRun, renderPerf, pathShown, syncPathToggles, get state() { return state; } };
 }
 
 document.addEventListener('DOMContentLoaded', () => {

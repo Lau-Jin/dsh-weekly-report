@@ -242,8 +242,10 @@
           <div class="wr-seg" id="period-seg">
             <button data-period="current" class="is-active">本周</button>
             <button data-period="last">上周</button>
-            <button data-period="range">自定义</button>
+            <button data-period="lastMonth">上个月</button>
+            <button data-period="range">自定义区间</button>
           </div>
+          <p class="wr-field__tip" style="margin:8px 0 0" id="period-tip"></p>
           <div id="range-wrap" class="wr-grid2" hidden style="margin-top:12px">
             <div class="wr-field" style="margin:0">
               <div class="wr-field__label"><b>开始</b></div>
@@ -297,12 +299,23 @@
           <div class="wr-actions" style="margin-top:10px">
             <button class="wr-btn" id="btn-perf-view">查看绩效表</button>
             <button class="wr-btn wr-btn--ghost" id="btn-perf-open">打开所在目录</button>
-            <button class="wr-btn wr-btn--ghost" id="btn-perf-root">打开绩效表目录</button>
             <button class="wr-btn" id="btn-perf-check2">核对本月绩效表</button>
-            <button class="wr-btn wr-btn--ghost" id="btn-perf-tpl" title="检查绩效表目录里的模板能不能用（新装机器自检）">模板自检</button>
+            <button class="wr-btn wr-btn--ghost" id="btn-perf-tpl" title="检查绩效表目录里的模板能不能用">模板自检</button>
           </div>
+          <details class="wr-tplhelp">
+            <summary>怎么准备模板？（新装必看）</summary>
+            <div class="wr-tplhelp__body">
+              <ol>
+                <li>配置页「绩效表目录」填一个**已存在**的目录，例如 <code>D:\…\绩效表\2026</code></li>
+                <li>往这个目录里放**至少一张**《员工月度考核表》.xlsx（名字随意，Excel 的 <code>~$</code> 临时文件会被忽略）</li>
+                <li>工作表名最好是「月度考核」；第 7 行起是任务区，下面要有「工作任务考核（60%）」等区块</li>
+                <li>引擎优先挑名字里带「当年当月」的那张当模板，没有就用最新那张；<b>模板本身不会被改动</b>，生成的是当月新表</li>
+                <li>目录为空时：周报照常生成，只提示「还没有可用模板」；点「模板自检」可看现状</li>
+              </ol>
+            </div>
+          </details>
           <p class="wr-field__tip" style="margin:8px 0 0">
-            绩效表 = 本月全部周报内容的合集（同一事项一行，起止时间取并集，格式不变）。
+            绩效表 = 本月全部周报内容的合集（同一事项一行，起止时间取并集，格式按模板不变）。
             「查看绩效表」直接在面板里看内容；「核对」会对照本月各周周报逐条比对，缺的自动补进表里。
           </p>
           <details id="perf-archive" style="margin-top:10px" hidden>
@@ -317,6 +330,43 @@
         <button class="wr-btn wr-btn--primary wr-btn--lg" id="btn-run">开始生成</button>
         <button class="wr-btn" id="btn-cancel" disabled>终止</button>
         <span class="wr-field__hint" id="run-hint"></span>
+      </div>
+      <p class="wr-field__tip" id="run-tip" style="margin:0 0 10px"></p>
+
+      <div class="wr-card">
+        <div class="wr-card__head">
+          <span class="wr-card__title">周报模板</span>
+          <span class="wr-card__hint" id="rpt-tpl-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <p class="wr-field__tip" style="margin:0">
+            周报按模板渲染：每条事项一块，块里的 <code>{{category}}</code>、<code>{{school}}</code>、
+            <code>{{time}}</code>、<code>{{subject}}</code>、<code>{{work}}</code>、
+            <code>{{note}}</code>、<code>{{progress}}</code> 会被替换成实际内容。
+            改这个模板文件即可改周报的样子，不用动代码。
+          </p>
+          <div class="wr-mono" id="rpt-tpl-path" style="font-size:11px;color:var(--fg-3);margin-top:8px;word-break:break-all">—</div>
+          <div class="wr-actions" style="margin-top:10px">
+            <button class="wr-btn wr-btn--ghost" id="btn-rpt-tpl-open" title="在资源管理器里打开周报输出目录">打开周报目录</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="wr-card" id="result-card" hidden>
+        <div class="wr-card__head">
+          <span class="wr-card__title">本次生成结果</span>
+          <span class="wr-card__hint" id="result-hint"></span>
+        </div>
+        <div class="wr-card__body">
+          <div class="wr-res">
+            <div class="wr-res__head">周报</div>
+            <div id="result-reports" class="wr-res__list"></div>
+          </div>
+          <div class="wr-res">
+            <div class="wr-res__head">绩效表</div>
+            <div id="result-perf" class="wr-res__list"></div>
+          </div>
+        </div>
       </div>
 
       <div class="wr-card">

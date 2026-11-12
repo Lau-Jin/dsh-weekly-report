@@ -126,14 +126,15 @@ function exec(cmd, args, opts = {}) {
       child = spawn(cmd, args, {
         cwd: opts.cwd || P.ENGINE_DIR,
         windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', ...(opts.env || {}) },
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...(opts.env || {}) },
       });
     } catch (e) {
       resolve({ code: -1, out: String(e.message || e) });
       return;
     }
     let out = '';
-    const cap = (d) => { out += d.toString('utf8'); if (out.length > 8000) out = out.slice(-8000); };
+    // 上限别太小：绩效表 dump 的 JSON 有十几 KB，截断了就解析不出来
+    const cap = (d) => { out += d.toString('utf8'); if (out.length > 512000) out = out.slice(-512000); };
     child.stdout.on('data', cap);
     child.stderr.on('data', cap);
     const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (_) { /* ignore */ } }, opts.timeout || 20000);
@@ -263,17 +264,29 @@ function listPerfTables() {
   return out;
 }
 
+// 读一张绩效表要起一次 python（openpyxl 打开 xlsx 约 1s），所以按「路径 + 修改时间」缓存一下，
+// 面板里反复点同一张表（展开/收起）就不用每次都等几秒。
+const perfTableCache = new Map();   // path -> { at, mtimeMs, data }
+const PERF_CACHE_TTL = 60 * 1000;
+
 /** 读一张绩效表的内容（走引擎的 --perf-dump，openpyxl 在那边）。 */
 async function readPerfTable(target) {
+  let mtimeMs = 0;
+  try { mtimeMs = fs.statSync(target).mtimeMs; } catch (_) { mtimeMs = 0; }
+  const hit = perfTableCache.get(target);
+  if (hit && hit.mtimeMs === mtimeMs && Date.now() - hit.at < PERF_CACHE_TTL) {
+    return hit.data;
+  }
+
   const py = findPython();
   const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--perf-dump',
     '--perf-xlsx', target], { timeout: 60000, cwd: P.ENGINE_DIR });
-  const line = (r.out || '').trim().split(/\r?\n/).filter((l) => l.trim().startsWith('{')).pop();
-  let data = null;
-  try { data = JSON.parse(line || '{}'); } catch (_) { data = null; }
+  const data = extractJson(r.out);
   if (!data) return { ok: false, error: (r.out || '').slice(-400) || '读取绩效表失败' };
   if (data.error) return { ok: false, error: data.error, path: data.path || '' };
-  return { ok: true, table: data };
+  const out = { ok: true, table: data };
+  perfTableCache.set(target, { at: Date.now(), mtimeMs, data: out });
+  return out;
 }
 
 // ---------------------------------------------------------------- 打开目录
@@ -399,6 +412,7 @@ function buildChecks(cfg, deps, task, key) {
 let run = {
   running: false, startedAt: null, finishedAt: null, exitCode: null,
   lines: [], args: [], outPath: '', error: '', child: null,
+  artifacts: { reports: [], perf: [], weeks: [] },
 };
 
 function pushLine(line) {
@@ -411,9 +425,14 @@ function pushLine(line) {
 function resolvePeriod(body) {
   const args = ['--config', P.CONFIG];
   if (body.period === 'range' && body.start && body.end) {
+    // 指定区间：**区间内每一周各出一份**周报（引擎按自然周拆）
     args.push('--start', String(body.start), '--end', String(body.end));
   } else if (body.period === 'last') {
     args.push('--week', 'last');
+  } else if (body.period === 'lastMonth') {
+    args.push('--last-month');
+  } else if (body.period === 'month' && body.month) {
+    args.push('--month', String(body.month));
   } else {
     args.push('--week', 'current');
   }
@@ -434,13 +453,14 @@ function startRun(body) {
   run = {
     running: true, startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
     lines: [], args, outPath: '', error: '', child: null,
+    artifacts: { reports: [], perf: [], weeks: [] },
   };
   pushLine('$ ' + [py, ...args].join(' '));
 
   const child = spawn(py, args, {
     cwd: P.ENGINE_DIR,
     windowsHide: true,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
   });
   run.child = child;
 
@@ -461,6 +481,10 @@ function startRun(body) {
     for (const line of run.lines) {
       const m = /^OK\s+\d+\s+条\s+out=(.+)$/.exec(line.trim());
       if (m) run.outPath = m[1].trim();
+      const a = /^ARTIFACTS_JSON\s+(.+)$/.exec(line.trim());
+      if (a) {
+        try { run.artifacts = JSON.parse(a[1]); } catch (_) { /* ignore */ }
+      }
     }
     if (code !== 0 && !run.error) run.error = `退出码 ${code}`;
     log(`run finished code=${code} out=${run.outPath}`);
@@ -473,6 +497,7 @@ function publicRun() {
     running: run.running, startedAt: run.startedAt, finishedAt: run.finishedAt,
     exitCode: run.exitCode, lines: run.lines.slice(-250), args: run.args,
     outPath: run.outPath, error: run.error,
+    artifacts: run.artifacts || { reports: [], perf: [], weeks: [] },
   };
 }
 
@@ -483,6 +508,18 @@ const PS_DIR = path.join(__dirname, 'ps');
 function runPs(script, args = []) {
   return exec('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(PS_DIR, script), ...args], { timeout: 40000 });
+}
+
+/** 从混杂输出里抠出第一个完整的 JSON 对象（不依赖「行首是 {」）。 */
+function extractJson(out) {
+  const s = String(out || '');
+  const start = s.indexOf('{');
+  if (start < 0) return null;
+  for (let end = s.length; end > start; end -= 1) {
+    if (s[end - 1] !== '}') continue;
+    try { return JSON.parse(s.slice(start, end)); } catch (_) { /* 继续往前找 */ }
+  }
+  return null;
 }
 
 function parseLastJson(out) {
@@ -652,6 +689,11 @@ async function collectState() {
       root: perfRoot(),
       current: perfFileFor(new Date().getFullYear(), new Date().getMonth() + 1),
       tables: listPerfTables(),
+    },
+    templates: {
+      // 周报模板：配置里指定 > 插件自带 > 内置默认
+      report: path.join(P.ENGINE_DIR, 'templates', '周报模板.txt'),
+      reportCustom: String((config.report_template || '')).trim(),
     },
     checks: buildChecks(config, deps, schedule, key),
     notes: NOTES,
@@ -841,9 +883,7 @@ const server = http.createServer(async (req, res) => {
       const py = findPython();
       const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--perf-template-check'],
         { timeout: 90000, cwd: P.ENGINE_DIR });
-      const line = (r.out || '').trim().split(/\r?\n/).filter((l) => l.trim().startsWith('{')).pop();
-      let data = null;
-      try { data = JSON.parse(line || '{}'); } catch (_) { data = null; }
+      const data = extractJson(r.out);
       if (!data) {
         json(res, 500, { ok: false, error: (r.out || '').slice(-400) || '模板自检失败' });
         return;

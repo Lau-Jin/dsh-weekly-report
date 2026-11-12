@@ -177,6 +177,43 @@ def main():
     check("未完成 → 结束日拉到本周周日",
           n and n["d2"] == WE.isoformat(), f"{n and n['d2']}")
 
+    # ---- 周期拆分：区间内按周，每段一份 ----
+    print("")
+    print("周期拆分：")
+    from datetime import date as _date
+    ws_ = g.weeks_in_range(_date(2026, 11, 2), _date(2026, 11, 15))
+    check("weeks_in_range：两周切成两段", len(ws_) == 2, str(ws_))
+    check("weeks_in_range：段边界是周一~周日",
+          ws_[0][0].weekday() == 0 and ws_[0][1].weekday() == 6, str(ws_))
+    check("weeks_in_range：单周就是一段", len(g.weeks_in_range(_date(2026, 11, 9), _date(2026, 11, 15))) == 1)
+    check("weeks_in_range：跨三周切三段",
+          len(g.weeks_in_range(_date(2026, 11, 2), _date(2026, 11, 20))) == 3)
+    check("month_range：整月 1 号到最后一天",
+          g.month_range(2026, 11) == (_date(2026, 11, 1), _date(2026, 11, 30)),
+          str(g.month_range(2026, 11)))
+    check("month_range：2 月按闰年算",
+          g.month_range(2024, 2) == (_date(2024, 2, 1), _date(2024, 2, 29)),
+          str(g.month_range(2024, 2)))
+    check("last_month_range：11 月的上个月是 10 月",
+          g.last_month_range(_date(2026, 11, 12)) == (_date(2026, 10, 1), _date(2026, 10, 31)),
+          str(g.last_month_range(_date(2026, 11, 12))))
+    check("last_month_range：1 月的上个月是去年 12 月",
+          g.last_month_range(_date(2026, 1, 15)) == (_date(2025, 12, 1), _date(2025, 12, 31)),
+          str(g.last_month_range(_date(2026, 1, 15))))
+
+    # ---- 周报模板 ----
+    print("周报模板：")
+    tpl = g.load_report_template()
+    check("有可用模板（插件自带或内置默认）", bool(tpl and tpl.strip()))
+    one = {"category": "项目运维", "school": "示例学院", "time": "2026年11月9日",
+           "subject": "示例事项", "work": "http://x", "note": "无", "progress": "100%"}
+    out = g.render_report([one], "【{{category}}】\n{{school}} | {{time}} | {{subject}} | {{work}} | {{note}} | {{progress}}")
+    check("按模板渲染：占位符全部替换",
+          "{{" not in out and "示例学院" in out and "示例事项" in out, out[:120])
+    out2 = g.render_report([one, dict(one, subject="第二条")], "· {{subject}}")
+    check("多条目各出一块", out2.count("· ") == 2, out2[:120])
+    check("模板里没有的字段不影响渲染", "{" not in g.render_report([one], "只有 {{subject}}"))
+
     print("")
     print(f"通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")
     for f2 in FAILED:

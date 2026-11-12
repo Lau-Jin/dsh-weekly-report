@@ -280,8 +280,10 @@ def main():
             time.sleep(2.5)
             titles = explorer_windows()
             check("open-dir：目录内路径放行", code == 200 and r.get("ok") is True, f"{code} {r}")
+            # 窗口标题一般是目录名，但也可能是「文件资源管理器」（还没切到该目录）——两种都算弹出来了
             check("open-dir：资源管理器真的弹出窗口",
-                  any("2026" in t or "月" in t for t in titles), f"windows={titles}")
+                  bool(titles) and any(("2026" in x or "月" in x or "文件资源管理器" in x) for x in titles),
+                  f"windows={titles}")
             close_explorer_windows()
 
             code, r = post("/api/open-dir", {"path": sample})

@@ -1,0 +1,7 @@
+【{{category}}】
+{{school}}
+  时间: {{time}}
+  事项: {{subject}}
+  工作内容：{{work}}
+  重要说明：{{note}}
+  进度：{{progress}}

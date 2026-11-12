@@ -102,6 +102,15 @@ const evaluate = async (client, expression) => {
   return r.result.value
 }
 
+/** 等某个条件成立（读绩效表要起 python，可能好几秒）。 */
+const waitFor = async (client, expr, tries = 60, gap = 400) => {
+  for (let i = 0; i < tries; i += 1) {
+    if (await evaluate(client, expr)) return true
+    await sleep(gap)
+  }
+  return false
+}
+
 const waitReady = async (client) => {
   for (let i = 0; i < 40; i += 1) {
     await sleep(250)
@@ -159,7 +168,10 @@ async function main() {
   check('路径卡有自己的开关', s.labels.paths === '显示路径', JSON.stringify(s.labels))
   check('定时任务卡有自己的开关', s.labels.schedule === '显示路径', JSON.stringify(s.labels))
   check('最近一次生成有自己的开关', s.labels.lastrun === '显示路径', JSON.stringify(s.labels))
-  check('默认全部隐藏', s.pathsHidden && s.schedHidden, JSON.stringify(s))
+  // 路径卡默认隐藏；定时任务卡有计划任务时才有命令（这时不隐藏），看内容有没有被遮住即可
+  // 默认隐藏：有内容的块遮起来（显示「已隐藏」），没内容的块不显示按钮
+  check('默认全部隐藏（按内容判断）',
+    s.pathsHidden && (!s.hasPath.schedule || s.schedHidden), JSON.stringify(s))
   // 开关只出现在「这块真的有路径」的地方，没有路径的块不给按钮
   for (const key of ['paths', 'schedule', 'lastrun']) {
     if (!s.visible[key] && !s.hasPath[key]) continue;
@@ -176,7 +188,8 @@ async function main() {
   s = await state()
   check('路径卡可单独展开（出现真实路径）', !s.pathsHidden)
   check('路径卡按钮变「隐藏路径」', s.labels.paths === '隐藏路径', s.labels.paths)
-  check('别的卡仍是隐藏（互不影响）', s.schedHidden === true && s.labels.schedule === '显示路径')
+  check('别的卡不受影响（互不影响）', s.labels.schedule === '显示路径'
+    && (s.schedHidden === true || !s.hasPath.schedule))
 
   // 4. 定时任务卡单独开
   await evaluate(client, "document.querySelector('[data-path-toggle=\"schedule\"]').click()")
@@ -275,6 +288,19 @@ async function main() {
   check('有路径时：开关回来（定时任务 / 最近一次生成 / 路径卡）',
     noPath.scheduleWithPath && noPath.lastrunWithPath && noPath.pathsWithPath, JSON.stringify(noPath))
 
+  // 9.55 周期控件与说明
+  const periodUi = await evaluate(client, `(() => {
+    const segs = Array.from(document.querySelectorAll('#period-seg button')).map((b) => ({
+      period: b.dataset.period, text: b.textContent.trim(),
+    }));
+    return { segs, tip: (document.querySelector('#period-tip') || {}).textContent || '' };
+  })()`)
+  check('周期有「本周 / 上周 / 上个月 / 自定义区间」四个',
+    periodUi.segs.map((s) => s.period).join(',') === 'current,last,lastMonth,range',
+    JSON.stringify(periodUi.segs))
+  check('「上个月」按钮名称贴切', periodUi.segs.some((s) => s.period === 'lastMonth' && s.text === '上个月'))
+  check('周期说明有文字（说清这趟生成什么）', periodUi.tip.length > 8, periodUi.tip)
+
   // 9.6 绩效表卡片（生成页）
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"run\"]').click()")
   await sleep(400)
@@ -297,14 +323,30 @@ async function main() {
     perfCard.hasCard && perfCard.inRunPane && perfCard.title.includes('绩效表'), JSON.stringify(perfCard))
   check('绩效表卡片有「查看绩效表」按钮', perfCard.view === true)
   check('绩效表卡片有「打开所在目录」按钮', perfCard.open === true)
-  check('绩效表卡片有「打开绩效表目录」按钮', perfCard.root === true)
+  check('绩效表卡片不再有重复的「打开绩效表目录」按钮', perfCard.root === false)
   check('绩效表卡片有「核对本月绩效表」按钮', perfCard.check === true)
   check('绩效表卡片显示本月表的状态', perfCard.text.length > 0, perfCard.text)
   check('绩效表卡片列出往月表', perfCard.archiveItems > 0, String(perfCard.archiveItems))
+  check('绩效表卡片有模板自检说明（怎么准备模板）',
+    !!(await evaluate(client, "!!document.querySelector('.wr-tplhelp')")), '')
+  check('模板自检说明默认收起（不占地方）',
+    !(await evaluate(client, "!!(document.querySelector('.wr-tplhelp')||{}).open")))
+
+  // 查看绩效表 → 有收起按钮
+  await evaluate(client, "document.querySelector('#btn-perf-view').click()")
+  await sleep(2500)
+  check('点「查看绩效表」后按钮变「收起绩效表」',
+    (await evaluate(client, "document.querySelector('#btn-perf-view').textContent.trim()")) === '收起绩效表',
+    await evaluate(client, "document.querySelector('#btn-perf-view').textContent.trim()"))
+  await evaluate(client, "document.querySelector('#btn-perf-view').click()")
+  await sleep(300)
+  check('再点一次收起（内容隐藏、按钮还原）',
+    (await evaluate(client, "document.querySelector('#perf-view-out').hidden")) === true
+    && (await evaluate(client, "document.querySelector('#btn-perf-view').textContent.trim()")) === '查看绩效表')
 
   // 表格渲染：必须是真表格（制表符文本在中英文混排下必然错位）
   await evaluate(client, "document.querySelector('#btn-perf-view').click()")
-  await sleep(2500)
+  await waitFor(client, "!!document.querySelector('#perf-view-out .wr-ptable')")
   const tbl = await evaluate(client, `(() => {
     const t = document.querySelector('#perf-view-out .wr-ptable');
     const rows = document.querySelectorAll('#perf-view-out .wr-ptable tbody tr');
@@ -324,14 +366,20 @@ async function main() {
   })()`)
   check('绩效表内容渲染成表格（不是制表符文本）',
     tbl.hasTable === true && tbl.hasTabbedPre === false, JSON.stringify(tbl))
-  check('表格有表头四列', tbl.ths.length === 4 && tbl.ths[0] === '类别' && tbl.ths[3] === '是否完成', JSON.stringify(tbl.ths))
-  check('表格每行列数一致', tbl.first.length === 4, JSON.stringify(tbl.first))
+  check('表格表头照抄表里的列名（五列）',
+    tbl.ths.length === 5 && tbl.ths[0] === '类别' && tbl.ths[1] === '任务名称'
+    && tbl.ths[2] === '开始时间' && tbl.ths[3] === '结束时间' && tbl.ths[4] === '是否完成',
+    JSON.stringify(tbl.ths))
+  check('表格每行列数一致', tbl.first.length === 5, JSON.stringify(tbl.first))
+  check('开始/结束时间分列显示（格式同表 yyyy/m/d）',
+    /^\d{4}\/\d{2}\/\d{2}$/.test(tbl.first[2]) && /^\d{4}\/\d{2}\/\d{2}$/.test(tbl.first[3]),
+    JSON.stringify(tbl.first))
   check('表格列宽固定不塌陷（事项列最宽）',
-    tbl.widths.length === 4 && tbl.widths[1] > tbl.widths[0] && tbl.widths[1] > tbl.widths[3], JSON.stringify(tbl.widths))
+    tbl.widths.length === 5 && tbl.widths[1] > tbl.widths[0] && tbl.widths[1] > tbl.widths[3], JSON.stringify(tbl.widths))
   // 不错位：每一行同一列的左边界必须一致（差 ≤1px）
   const align = await evaluate(client, `(() => {
     const rows = Array.from(document.querySelectorAll('#perf-view-out .wr-ptable tbody tr'));
-    const cols = 4;
+    const cols = 5;
     const offsets = [];
     for (let c = 0; c < cols; c += 1) {
       const xs = rows.map((r) => Math.round(r.children[c].getBoundingClientRect().left * 10) / 10);
@@ -361,7 +409,7 @@ async function main() {
   check('往月绩效表按目录（年份）收拢分组', arch.groups >= 1 && arch.groupNames.length === arch.groups, JSON.stringify(arch))
   check('每条往月表有自己的展开区', arch.itemHasView === true && arch.viewHidden === true, JSON.stringify(arch))
   await evaluate(client, "document.querySelector('.wr-pitem [data-perf-view]').click()")
-  await sleep(2500)
+  await waitFor(client, "!!document.querySelector('.wr-pitem .wr-pitem__view .wr-ptable')")
   const archAfter = await evaluate(client, `(() => {
     const item = document.querySelector('.wr-pitem');
     const out = item.querySelector('.wr-pitem__view');
@@ -377,6 +425,17 @@ async function main() {
   check('点往月表的「查看」→ 内容显示在该条下面',
     archAfter.hidden === false && archAfter.hasTable === true && archAfter.insideItem === true, JSON.stringify(archAfter))
   check('展开后按钮变成「收起」', archAfter.btnText === '收起', archAfter.btnText)
+  // 触发一次重画（模拟 15 秒轮询），展开状态必须还在
+  await evaluate(client, "window.__wrDebug.renderPerf(window.__wrDebug.state.data.perf)")
+  await sleep(300)
+  const afterRepaint = await evaluate(client, `(() => {
+    const item = document.querySelector('.wr-pitem');
+    if (!item) return { ok: false };
+    const out = item.querySelector('.wr-pitem__view');
+    return { hidden: out.hidden, btn: item.querySelector('[data-perf-view]').textContent.trim() };
+  })()`)
+  check('重画后展开的往月表不会被自动收起',
+    afterRepaint.hidden === false && afterRepaint.btn === '收起', JSON.stringify(afterRepaint))
   await evaluate(client, "document.querySelector('.wr-tab[data-tab=\"overview\"]').click()")
   await sleep(200)
 
