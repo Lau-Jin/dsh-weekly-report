@@ -1,4 +1,4 @@
-﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.7）
+﻿# dsh-weekly-report · 周报面板插件（自主版 v0.8.1）
 
 **完全自主**：生成引擎、配置、API Key、输出目录全部在插件内，不再依赖 `D:\Reports` 里的脚本和配置。
 装进 DSH 后在**侧边栏**用，也能单独用浏览器打开。
@@ -160,8 +160,7 @@ mklink /J "D:\Tools\Lau-tool\dsh-weekly-report" "D:\Tools\Lau-tool\dsh-weekly-re
 | 绩效表核对 | 「核对本月绩效表（缺的自动补）」按钮 + 核对报告正文 |
 | 系统定时任务 | 状态、下次运行、是否已接管，附带「登记每周自动生成（周日 22:00）」/「移除定时任务」按钮 |
 | 最近一次生成 | 成功/失败徽标 + 时间 + 产物路径（默认隐藏，卡片右上角单独开） |
-| 路径 | 默认隐藏；**每张卡片各自一个「显示路径 / 隐藏路径」按钮**（路径 / 定时任务 / 守护 / 最近一次生成 / 历史），互不影响，选择分别记住 |
-| 面板服务守护 | 折叠在页面最底部，点「展开」才显示状态与装/卸按钮（每 2 分钟探活） |
+| 路径 | 默认隐藏；**每张卡片各自一个「显示路径 / 隐藏路径」按钮**（路径 / 定时任务 / 最近一次生成 / 历史），互不影响，选择分别记住 |
 
 体检项：API Key、Python 环境、内置引擎、邮件通知、系统定时任务、绩效表目录、输出目录。
 
@@ -264,36 +263,49 @@ python "<插件>\service\engine\gen_weekly_text.py" --config "<插件>\service\d
 |---|---|
 | 探活接口 | 新增 **`GET /api/ping`**：不碰磁盘、不 spawn 进程，1~2 ms 返回 `{ok,pid,version,uptimeMs,busy}` |
 | 状态接口 | `/api/state` 全部读内存缓存：python 体检缓存 10 分钟、计划任务查询缓存 5 分钟，**先回旧值、后台刷新**，第一次调用也是毫秒级 |
-| 宿主心跳 | `lib/index.js` 改 ping 探活、20 秒一次、单飞（上一次拉起没结果不重复拉），拉起后 5 秒内复核，只记「起来／没起来」两种日志 |
+| 宿主心跳 | `lib/index.js` 改 ping 探活、20 秒一次、单飞（上一次拉起没结果不重复拉），拉起后 5 秒内复核，只记「起来／没起来」两种日志。**这也是唯一的一层保活**（v0.8.0 起） |
 | 面板/侧边栏 | 也改 ping；面板挂了时 3 秒一探，**服务回来后自动刷新 iframe**，不用手点「重试」 |
-| 系统守护 | Windows 计划任务 **`周报面板守护`**：每 2 分钟探一次 ping，不在就拉起（实测服务挂掉到恢复约 2 秒）；DSH 没开、服务被系统杀掉都能回来 |
 
 实测（本机）：`/api/ping` 0~1 ms，`/api/state` 首次 14 ms、之后 5~12 ms（改之前首次 4.9~6.4 秒）；
-20 次 `/api/state` 期间 powershell 进程数不增加；杀掉服务后由计划任务 2.1 秒拉起。
+20 次 `/api/state` 期间 powershell 进程数不增加；杀掉服务后宿主心跳 20 秒内拉起。
 
-守护相关：
+### 为什么不再装 `周报面板守护` 计划任务（v0.8.0 删除）
 
-```powershell
-# 装/卸（也可以点面板概览的「面板服务守护」卡片）
-powershell -ExecutionPolicy Bypass -File "<插件>\service\ps\watchdog-install.ps1"
-powershell -ExecutionPolicy Bypass -File "<插件>\service\ps\watchdog-remove.ps1"
+v0.7.1 起装过一个 Windows 计划任务 `周报面板守护`：每 2 分钟跑
+`powershell.exe -WindowStyle Hidden ... watchdog.ps1` 探一次 ping。问题是
+**`-WindowStyle Hidden` 是 PowerShell 自己启动后才应用的**，控制台窗口会先建出来再隐藏——
+桌面上每隔 2 分钟闪一个蓝色控制台窗口（实测可见 0.45 秒，`ConsoleWindowClass`）。
 
-# 手动看一眼
-Get-ScheduledTask -TaskName '周报面板守护' | Select-Object TaskName,State
-Invoke-RestMethod http://127.0.0.1:8798/api/ping
-Get-Content "$env:USERPROFILE\.dsh\weekly-report\logs\watchdog.log" -Tail 5
-```
+它要的能力本来就有：`lib/index.js` 的宿主心跳每 20 秒 `fetch /api/ping`，不在就用
+`spawn(..., { windowsHide: true, detached: true })` 拉起，**全程无窗口、不依赖 PowerShell**。
+所以 v0.8.0 把这个计划任务、`service/ps/watchdog*.ps1`、面板上的「面板服务守护」卡片、
+`/api/watchdog` 的读写实现全部删掉：
 
-`install.ps1` 现在默认就把守护装上（`-NoWatchdog` 可跳过），卸载时一并删掉。
+- `GET/POST /api/watchdog` 还在，但只回 **410**（告诉老面板「已下线」，不再安装任何东西）
+- `install.ps1` 的 `-NoWatchdog` 参数一并去掉；`-Uninstall` 与安装末尾会顺手清掉老任务
+- 老版本装过的任务用一句 `Unregister-ScheduledTask -TaskName '周报面板守护' -Confirm:$false` 清掉即可
+
+代价：DSH 完全退出时服务不再常驻（以前靠那个计划任务），重新打开 DSH 后几秒自动回来。
+需要「DSH 不开也要活着」的话，自己用「任务计划程序」建一个 **wscript 拉起的隐藏任务**，
+不要再用 `powershell.exe -WindowStyle Hidden`（会闪窗）。
 
 ## 定时任务接管
 
-概览页按钮「登记每周自动生成（周日 22:00）」会**创建/覆盖** Windows 计划任务 `周报自动生成`，命令变成：
+概览页按钮「登记每周自动生成（周日 22:00）」会**创建/覆盖** Windows 计划任务 `周报自动生成`。
+
+**v0.8.0 起是隐藏启动**：任务动作不再是 `python.exe ...`，而是
 
 ```
-python.exe "<插件>\service\engine\gen_weekly_text.py" \
-  --config "<插件>\service\data\config.json" --week current --perf-auto --log
+wscript.exe //nologo "%USERPROFILE%\.dsh\weekly-report\run-weekly-hidden.vbs"
 ```
+
+那个 VBS 由 `service/ps/task-install.ps1` 自动生成，里面一行
+`sh.Run "<python>" "<插件>\service\engine\gen_weekly_text.py" --config ... --week current --perf-auto --log, 0, True`，
+窗口样式 `0` = **从创建起就没有窗口**（`wscript.exe` 本身是 GUI 子系统程序，也不带控制台）。
+真正的命令行以注释形式写在 VBS 里（`' COMMAND: ...`），面板据此判断「任务是否指向本插件」。
+
+直接跑 `python.exe` 的老任务会在每周日 22:00 闪一个控制台窗口；重新点一次「登记每周自动生成」
+就会换成隐藏启动（想手工改也行，见 `task-install.ps1`）。
 
 仍在**你自己的 Windows 计划任务**里；随时可用「移除定时任务」还原。
 不接管也能用——面板里手动点「开始生成」一样跑。
@@ -303,8 +315,8 @@ python.exe "<插件>\service\engine\gen_weekly_text.py" \
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/ping` | 轻量探活（不 spawn 进程），1~2 ms 返回 pid/version/uptimeMs/busy |
-| GET | `/api/state` | 体检 + 配置(脱敏) + 定时任务 + 守护 + 历史 + 注意事项 + 运行状态（内存缓存，毫秒级） |
-| GET/POST | `/api/watchdog` | 面板服务守护：查询 / `{action:'install'|'remove'}` |
+| GET | `/api/state` | 体检 + 配置(脱敏) + 定时任务 + 历史 + 注意事项 + 运行状态（内存缓存，毫秒级） |
+| GET/POST | `/api/watchdog` | v0.8.0 起已下线，只回 **410**（服务由宿主心跳静默保活） |
 | POST | `/api/config` | 保存配置（密码占位符回传不会覆盖真实值） |
 | POST | `/api/api-key` | 保存 API Key |
 | POST | `/api/test-key` | 用给定/已存 Key 调一次 MCP，返回工具数与耗时 |

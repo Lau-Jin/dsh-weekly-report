@@ -1,13 +1,13 @@
 /**
  * 面板 UI 的交互回归测试（无头 Chrome + CDP，不依赖 jsdom）。
  *
- * 覆盖 v0.7.3：
- *   · 面板服务守护默认收起，点「展开」才出内容
+ * 覆盖 v0.8.0：
  *   · 每张卡片各自一个「显示路径 / 隐藏路径」开关，互不影响：
- *     路径卡、系统定时任务、面板服务守护、最近一次生成、历史
+ *     路径卡、系统定时任务、最近一次生成、历史
  *   · 开关状态按卡片分别记在 localStorage，刷新后保持
  *   · 系统定时任务按钮名称（不再出现「指向插件引擎」）
  *   · 品牌图标：favicon 与顶栏 logo 用的是 /icon.svg，且能正常加载
+ *   · 面板服务守护卡片已随 v0.8.0 下线（页面里不该再有）
  *
  * 跑法：
  *   node dsh-weekly-report/tests/test_panel_ui.mjs [--port 8798]
@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 const PORT = Number(process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : 8798)
-const BASE = `http://127.0.0.1:${PORT}/`
+const BASE = `http://127.0.0.1:${PORT}/?diag=1`
 const CHROME = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -125,35 +125,49 @@ async function main() {
     return {
       pathsHidden: document.querySelector('#paths').innerHTML.includes('已隐藏'),
       schedHidden: document.querySelector('#schedule').innerHTML.includes('已隐藏'),
-      wdHidden: document.querySelector('#watchdog').innerHTML.includes('已隐藏'),
       labels: {
         paths: btn('paths') && btn('paths').textContent.trim(),
         schedule: btn('schedule') && btn('schedule').textContent.trim(),
-        watchdog: btn('watchdog') && btn('watchdog').textContent.trim(),
         lastrun: btn('lastrun') && btn('lastrun').textContent.trim(),
         reports: btn('reports') && btn('reports').textContent.trim(),
       },
-      wdBodyHidden: document.querySelector('#wd-body').hidden,
-      wdToggle: document.querySelector('#btn-wd-toggle').textContent.trim(),
+      visible: {
+        paths: !!(btn('paths') && !btn('paths').hidden),
+        schedule: !!(btn('schedule') && !btn('schedule').hidden),
+        lastrun: !!(btn('lastrun') && !btn('lastrun').hidden),
+        reports: !!(btn('reports') && !btn('reports').hidden),
+      },
+      hasPath: {
+        // 「这块有没有路径」看数据，不看当前是否遮着：路径卡有 dd 且不是「未获取到路径」；
+        // 历史有列表行；定时任务/最近一次生成有 pathBlock（遮着时里面是「已隐藏」文本，但 .wr-mono 还在）
+        paths: document.querySelectorAll('#paths dd').length > 0 && !document.querySelector('#paths').innerHTML.includes('未获取到路径'),
+        schedule: !!document.querySelector('#schedule .wr-mono'),
+        lastrun: !!document.querySelector('#last-run .wr-mono'),
+        reports: document.querySelectorAll('#report-list .wr-item').length > 0,
+      },
     };
   })()`)
 
-  // 1. 守护卡默认收起
-  let s = await state()
-  check('面板服务守护默认收起', s.wdBodyHidden === true)
-  check('守护标题旁有「展开」按钮', s.wdToggle === '展开')
-  await evaluate(client, "document.querySelector('#btn-wd-toggle').click()")
-  await sleep(200)
-  s = await state()
-  check('点「展开」后正文出现', s.wdBodyHidden === false)
-  check('按钮变成「收起」', s.wdToggle === '收起')
+  // 0. v0.8.0：面板服务守护卡片已下线
+  check('页面不再有「面板服务守护」卡片', !(await evaluate(client, "document.body.innerText")).includes('面板服务守护'))
+  check('页面不再有守护相关控件',
+    !(await evaluate(client, "!!(document.querySelector('#watchdog') || document.querySelector('#btn-wd-toggle') || document.querySelector('#btn-wd-install'))")))
 
-  // 2. 每张卡都有独立开关
+  // 1. 每张卡都有独立开关
+  let s = await state()
   check('路径卡有自己的开关', s.labels.paths === '显示路径', JSON.stringify(s.labels))
   check('定时任务卡有自己的开关', s.labels.schedule === '显示路径', JSON.stringify(s.labels))
-  check('守护卡有自己的开关', s.labels.watchdog === '显示路径', JSON.stringify(s.labels))
   check('最近一次生成有自己的开关', s.labels.lastrun === '显示路径', JSON.stringify(s.labels))
-  check('默认全部隐藏', s.pathsHidden && s.wdHidden, JSON.stringify(s))
+  check('默认全部隐藏', s.pathsHidden && s.schedHidden, JSON.stringify(s))
+  // 开关只出现在「这块真的有路径」的地方，没有路径的块不给按钮
+  for (const key of ['paths', 'schedule', 'lastrun', 'reports']) {
+    if (!s.visible[key] && !s.hasPath[key]) continue;
+    check(`开关显隐与内容一致（${key}）`, s.visible[key] === s.hasPath[key],
+      `visible=${s.visible[key]} hasPath=${s.hasPath[key]}`);
+  }
+  check('没有路径就不显示开关（至少验证一个无路径情形）',
+    ['paths', 'schedule', 'lastrun', 'reports'].some((k) => !s.visible[k] || !s.hasPath[k]) ||
+    (s.visible.paths && s.hasPath.paths))
 
   // 3. 只开路径卡：其它卡不受影响
   await evaluate(client, "document.querySelector('[data-path-toggle=\"paths\"]').click()")
@@ -161,7 +175,7 @@ async function main() {
   s = await state()
   check('路径卡可单独展开（出现真实路径）', !s.pathsHidden)
   check('路径卡按钮变「隐藏路径」', s.labels.paths === '隐藏路径', s.labels.paths)
-  check('别的卡仍是隐藏（互不影响）', s.wdHidden === true && s.labels.schedule === '显示路径')
+  check('别的卡仍是隐藏（互不影响）', s.schedHidden === true && s.labels.schedule === '显示路径')
 
   // 4. 定时任务卡单独开
   await evaluate(client, "document.querySelector('[data-path-toggle=\"schedule\"]').click()")
@@ -171,18 +185,11 @@ async function main() {
   check('定时任务按钮变「隐藏路径」', s.labels.schedule === '隐藏路径', s.labels.schedule)
   check('路径卡不受影响（仍展开）', !s.pathsHidden)
 
-  // 5. 守护卡单独开（先展开卡片）
-  await evaluate(client, "document.querySelector('[data-path-toggle=\"watchdog\"]').click()")
-  await sleep(250)
-  s = await state()
-  check('守护卡单独展开（出现启动命令）', !s.wdHidden)
-  check('守护按钮变「隐藏路径」', s.labels.watchdog === '隐藏路径', s.labels.watchdog)
-
   // 6. 关掉路径卡，其它保持
   await evaluate(client, "document.querySelector('[data-path-toggle=\"paths\"]').click()")
   await sleep(250)
   s = await state()
-  check('关掉路径卡后只它隐藏', s.pathsHidden && !s.schedHidden && !s.wdHidden)
+  check('关掉路径卡后只它隐藏', s.pathsHidden && !s.schedHidden)
   check('关掉的按钮文字回到「显示路径」', s.labels.paths === '显示路径', s.labels.paths)
 
   // 7. 历史页开关独立（历史目录）
@@ -197,7 +204,7 @@ async function main() {
 
   // 8. localStorage 按卡片记
   const saved = JSON.parse(await evaluate(client, "window.localStorage.getItem('wr-show-paths')"))
-  check('localStorage 按卡片记状态', saved && saved.paths === false && saved.schedule === true && saved.watchdog === true && saved.reports === true, JSON.stringify(saved))
+  check('localStorage 按卡片记状态', saved && saved.paths === false && saved.schedule === true && saved.reports === true, JSON.stringify(saved))
 
   // 9. 按钮名称
   const schedBtn = await evaluate(client, "document.querySelector('#btn-sched-install').textContent.trim()")
@@ -221,14 +228,43 @@ async function main() {
   check('图标能加载且是合法 SVG（/icon.svg, image/svg+xml）',
     iconOk.ok && /svg/.test(iconOk.type || ''), JSON.stringify(iconOk))
 
+  // 9.6 没有路径就不出现开关：用 ?diag=1 暴露的渲染函数喂空数据，按钮必须跟着消失
+  const noPath = await evaluate(client, `(() => {
+    const b = (k) => document.querySelector('[data-path-toggle="' + k + '"]');
+    const d = window.__wrDebug;
+    if (!d) return { ok: false, reason: 'no debug hook' };
+    const seen = {};
+    d.renderSchedule({ installed: false });
+    seen.scheduleWithoutPath = b('schedule').hidden;
+    d.renderLastRun({ lines: [] });
+    seen.lastrunWithoutPath = b('lastrun').hidden;
+    d.renderReports([]);
+    seen.reportsWithoutPath = b('reports').hidden;
+    d.renderPaths({});
+    seen.pathsWithoutPath = b('paths').hidden;
+    // 再喂回有路径的数据，按钮应该回来
+    d.renderSchedule({ installed: true, target: 'x\\y.cmd', status: 'Ready', nextRun: '2026-11-16 22:00', pointsToPlugin: true });
+    seen.scheduleWithPath = !b('schedule').hidden;
+    d.renderLastRun({ startedAt: '2026-11-12T00:00:00Z', exitCode: 0, outPath: 'x\\周报.txt', lines: [] });
+    seen.lastrunWithPath = !b('lastrun').hidden;
+    d.renderPaths({ plugin: 'x\\plugin', outDir: 'x\\out' });
+    seen.pathsWithPath = !b('paths').hidden;
+    return seen;
+  })()`)
+  check('没有路径时：定时任务不给开关', noPath.scheduleWithoutPath === true, JSON.stringify(noPath))
+  check('没有路径时：最近一次生成不给开关', noPath.lastrunWithoutPath === true, JSON.stringify(noPath))
+  check('没有路径时：历史不给开关', noPath.reportsWithoutPath === true, JSON.stringify(noPath))
+  check('没有路径时：路径卡不给开关', noPath.pathsWithoutPath === true, JSON.stringify(noPath))
+  check('有路径时：开关回来（定时任务 / 最近一次生成 / 路径卡）',
+    noPath.scheduleWithPath && noPath.lastrunWithPath && noPath.pathsWithPath, JSON.stringify(noPath))
+
   // 10. 刷新后保持（各卡的状态各自恢复）
   await client.send('Page.reload', {})
   await sleep(2500)
   await waitReady(client)
   const after = await state()
   check('刷新后：关掉的卡仍隐藏', after.pathsHidden === true)
-  check('刷新后：开着的卡仍显示', after.schedHidden === false && after.wdHidden === false)
-  check('刷新后：守护卡回到收起', after.wdBodyHidden === true)
+  check('刷新后：开着的卡仍显示', after.schedHidden === false)
 
   client.close()
   console.log('')

@@ -10,6 +10,11 @@
  *     会把活着服务误判成挂了，然后反复拉起 → 日志里一堆「port in use」）
  *   · 心跳 20 秒一次，单飞（上一次拉起还没结果就不重复拉起）
  *   · 拉起后 5 秒内复核一次，只记「起来 / 没起来」两种日志，不再刷屏
+ *
+ * 2026-11-12（v0.8.0）：这一层成为**唯一**的保活手段。
+ * 原来还有个 Windows 计划任务「周报面板守护」跑 powershell 探活，但
+ * `powershell.exe -WindowStyle Hidden` 会先建控制台窗口再隐藏（桌面每 2 分钟闪一下蓝窗），
+ * 已连同 service/ps/watchdog*.ps1 一起删除；这里的 spawn 用 windowsHide，全程无窗口。
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'

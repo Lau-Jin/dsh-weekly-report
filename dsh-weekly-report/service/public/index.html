@@ -122,26 +122,6 @@
         <div class="wr-card__body"><dl class="wr-kv" id="paths"></dl></div>
       </div>
 
-      <div class="wr-card">
-        <div class="wr-card__head">
-          <span class="wr-card__title">面板服务守护</span>
-          <span class="wr-card__hint">
-            <button class="wr-minibtn" data-path-toggle="watchdog" type="button">显示路径</button>
-            <button class="wr-minibtn" id="btn-wd-toggle" type="button" aria-expanded="false">展开</button>
-          </span>
-        </div>
-        <div class="wr-card__body" id="wd-body" hidden>
-          <div id="watchdog" class="wr-muted" style="font-size:12px;line-height:1.7">—</div>
-          <div class="wr-actions" style="margin-top:10px">
-            <button class="wr-btn" id="btn-wd-install">装守护（每 2 分钟探活）</button>
-            <button class="wr-btn wr-btn--danger" id="btn-wd-remove">移除守护</button>
-          </div>
-          <p class="wr-field__tip" style="margin:8px 0 0">
-            守护是 Windows 计划任务：每 2 分钟请求一次 /api/ping，服务不在就自动拉起。
-            装了以后关掉 DSH、服务被系统杀掉，面板也能自己回来。
-          </p>
-        </div>
-      </div>
     </section>
 
     <!-- ================= 配置 ================= -->

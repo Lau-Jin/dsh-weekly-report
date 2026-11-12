@@ -58,10 +58,10 @@ const fmtTime = (iso) => {
 const fmtSize = (n) => (n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B');
 
 /* ---------------------------------------------------------------- 路径显示开关 */
-// 每张卡片各自一个开关（路径卡 / 定时任务 / 面板服务守护 / 最近一次生成 / 历史），
+// 每张卡片各自一个开关（路径卡 / 定时任务 / 最近一次生成 / 历史），
 // 默认全藏；各自独立、各自记得住，互不影响。
-const PATH_KEYS = ['paths', 'schedule', 'watchdog', 'lastrun', 'reports'];
-const pathShown = { paths: false, schedule: false, watchdog: false, lastrun: false, reports: false };
+const PATH_KEYS = ['paths', 'schedule', 'lastrun', 'reports'];
+const pathShown = { paths: false, schedule: false, lastrun: false, reports: false };
 try {
   const saved = JSON.parse(window.localStorage.getItem('wr-show-paths') || '{}');
   if (saved && typeof saved === 'object') {
@@ -91,6 +91,12 @@ function syncPathToggles() {
     b.textContent = pathShown[key] ? '隐藏路径' : '显示路径';
     b.title = pathShown[key] ? '收起这张卡片里的路径' : '显示这张卡片里的路径';
   });
+}
+
+/** 只有这块真的会显示路径时，才给出「显示路径 / 隐藏路径」按钮。 */
+function setPathToggle(key, visible) {
+  const btn = document.querySelector(`[data-path-toggle="${key}"]`);
+  if (btn) btn.hidden = !visible;
 }
 
 /* ---------------------------------------------------------------- 渲染：顶栏 */
@@ -130,6 +136,12 @@ function renderPaths(paths) {
     ['API Key', paths.key],
     ['输出目录', paths.outDir],
   ].filter(([, v]) => v);
+  setPathToggle('paths', rows.length > 0);
+  if (!rows.length) {
+    $('#paths').innerHTML = `<dt>路径</dt>
+      <dd><span class="wr-muted">未获取到路径</span></dd>`;
+    return;
+  }
   if (!pathShown.paths) {
     $('#paths').innerHTML = `<dt>路径</dt>
       <dd><span class="wr-muted">•••• 已隐藏（点这张卡右上角的「显示路径」查看）</span></dd>`;
@@ -147,14 +159,17 @@ function renderSchedule(s) {
   const hint = $('#sched-hint');
   if (!s || s.pending) {
     box.innerHTML = '<span class="wr-muted">查询中…（后台在问 Windows 计划任务）</span>';
+    setPathToggle('schedule', false);
     if (hint) hint.textContent = '';
     return;
   }
   if (!s.installed) {
     box.innerHTML = '<span class="wr-muted">未登记（不登记也能在面板里手动生成）</span>';
+    setPathToggle('schedule', false);
     hint.textContent = '';
     return;
   }
+  setPathToggle('schedule', Boolean(s.target));
   const chips = [];
   if (s.status) chips.push(`<span class="wr-chip">${esc(s.status)}</span>`);
   if (s.nextRun) chips.push(`<span class="wr-chip">下次 ${esc(s.nextRun)}</span>`);
@@ -165,36 +180,16 @@ function renderSchedule(s) {
   hint.textContent = '';
 }
 
-function renderWatchdog(wd) {
-  const box = $('#watchdog');
-  const hint = $('#wd-hint');
-  if (!box) return;
-  if (!wd || wd.pending) {
-    box.innerHTML = '<span class="wr-muted">查询中…</span>';
-    if (hint) hint.textContent = '';
-    return;
-  }
-  if (!wd.installed) {
-    box.innerHTML = '<span class="wr-muted">未装守护（服务挂了只能靠 DSH 宿主 20 秒心跳拉起）</span>';
-    if (hint) hint.textContent = '';
-    return;
-  }
-  const chips = [];
-  if (wd.state) chips.push(`<span class="wr-chip">${esc(wd.state)}</span>`);
-  if (wd.next) chips.push(`<span class="wr-chip">下次 ${esc(wd.next)}</span>`);
-  chips.push('<span class="wr-chip wr-chip--ok">每 2 分钟探活</span>');
-  box.innerHTML = `<div class="wr-chips">${chips.join('')}</div>` + pathBlock(wd.target, 'watchdog');
-  if (hint) hint.textContent = '';
-}
-
 function renderLastRun(run) {
   const box = $('#last-run');
   const hint = $('#lastrun-hint');
   if (!run || (!run.startedAt && !(run.lines || []).length)) {
     box.innerHTML = '<span class="wr-muted">尚未生成</span>';
+    setPathToggle('lastrun', false);
     hint.textContent = '';
     return;
   }
+  setPathToggle('lastrun', Boolean(run.outPath));
   const okRun = run.exitCode === 0;
   const chips = [
     run.running
@@ -251,6 +246,7 @@ function renderReports(reports) {
   const q = state.reportQuery.trim().toLowerCase();
   const list = q ? reports.filter((r) => r.name.toLowerCase().includes(q)) : reports;
   $('#report-hint').textContent = `${list.length} / ${reports.length} 份`;
+  setPathToggle('reports', list.some((r) => r && r.dir));
   if (!list.length) {
     box.innerHTML = `<div class="wr-empty">${reports.length ? '没有匹配的文件' : '还没生成过周报'}</div>`;
     return;
@@ -351,7 +347,6 @@ function applyState(data) {
   renderChecks(data.checks || []);
   renderPaths(data.paths || {});
   renderSchedule(data.schedule);
-  renderWatchdog(data.watchdog);
   renderLastRun(data.run);
   renderNotes(data.notes || []);
   renderReports(data.reports || []);
@@ -601,34 +596,6 @@ function bindActions() {
     pre.dataset.cleared = '1';
   };
 
-  $('#btn-wd-install').onclick = async () => {
-    const btn = $('#btn-wd-install');
-    btn.disabled = true;
-    try {
-      const r = await post('/api/watchdog', { action: 'install' });
-      toast(r.ok ? '守护已装好：每 2 分钟探活' : '装守护失败', r.ok ? 'ok' : 'err');
-      await refresh(true);
-    } catch (e) { toast('失败：' + e.message, 'err'); } finally { btn.disabled = false; }
-  };
-
-  $('#btn-wd-remove').onclick = async () => {
-    if (!confirm('移除面板服务守护？之后服务挂了只能靠 DSH 宿主心跳拉起。')) return;
-    try {
-      const r = await post('/api/watchdog', { action: 'remove' });
-      toast(r.ok ? '守护已移除' : '移除失败', r.ok ? 'ok' : 'err');
-      await refresh(true);
-    } catch (e) { toast('失败：' + e.message, 'err'); }
-  };
-
-  $('#btn-wd-toggle').onclick = () => {
-    const body = $('#wd-body');
-    const btn = $('#btn-wd-toggle');
-    const open = body.hidden;
-    body.hidden = !open;
-    btn.textContent = open ? '收起' : '展开';
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  };
-
   // 路径开关：每张卡各管各的，只刷新自己那一块
   $$('[data-path-toggle]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -640,7 +607,6 @@ function bindActions() {
       if (!d) return;
       if (key === 'paths') renderPaths(d.paths || {});
       else if (key === 'schedule') renderSchedule(d.schedule);
-      else if (key === 'watchdog') renderWatchdog(d.watchdog);
       else if (key === 'lastrun') renderLastRun(d.run);
       else if (key === 'reports') renderReports(d.reports || []);
     });
@@ -958,6 +924,11 @@ function runLayoutDiag() {
   pre.id = '__diag';
   pre.textContent = JSON.stringify({ total: rows.length, groups: uniq, rows }, null, 2);
   document.body.appendChild(pre);
+}
+
+// 测试用：?diag=1 时把几个渲染函数挂到 window，方便验证「没有路径就没有开关」这类边界
+if (new URLSearchParams(location.search).has('diag')) {
+  window.__wrDebug = { renderPaths, renderSchedule, renderLastRun, renderReports, pathShown, syncPathToggles };
 }
 
 document.addEventListener('DOMContentLoaded', () => {

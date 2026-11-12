@@ -221,8 +221,8 @@ const NOTES = [
   { id: 'rate', level: 'warn', title: '接口限流', text: '研发平台 MCP 限 60 次/分钟；撞限会等 20 秒重试，生成一次通常 1~3 分钟，期间别重复点。' },
   { id: 'cancel', level: 'info', title: '已取消不写', text: '工单状态 cancelled / 任务「已取消」一律跳过。' },
   { id: 'engine', level: 'info', title: '引擎随插件走', text: '生成脚本在 service/engine/gen_weekly_text.py，配置与 Key 在 service/data/，输出在 service/data/reports/，不依赖外部目录。' },
-  { id: 'alive', level: 'info', title: '探活用 /api/ping', text: '/api/ping 不碰磁盘、不 spawn 进程，1~2 ms 就回；宿主心跳、侧边栏状态点、守护任务都用它。面板卡不卡、红不红，以它为准。' },
-  { id: 'watchdog', level: 'info', title: '面板服务守护', text: '计划任务「周报面板守护」每 2 分钟探一次 ping，服务不在就自动拉起；面板概览可一键装/卸，日志在 %USERPROFILE%\\.dsh\\weekly-report\\logs\\watchdog.log。' },
+  { id: 'alive', level: 'info', title: '探活用 /api/ping', text: '/api/ping 不碰磁盘、不 spawn 进程，1~2 ms 就回；宿主心跳、侧边栏状态点都用它。面板卡不卡、红不红，以它为准。' },
+  { id: 'keepalive', level: 'info', title: '服务由宿主静默保活', text: 'v0.8.0 起不再装 Windows 计划任务守护（它会拉 powershell，控制台窗口每次闪一下）。改由 DSH 宿主插件每 20 秒 fetch 一次 /api/ping，不在就静默拉起（windowsHide，无窗口）。DSH 关着时服务不常驻，重新打开 DSH 后几秒自动回来。' },
   { id: 'key', level: 'danger', title: '凭据安全', text: 'API Key 与邮箱授权码只存本机 service/data/，不要提交到代码库或随包外发。' },
 ];
 
@@ -363,10 +363,9 @@ function parseLastJson(out) {
 }
 
 async function readTasks() {
-  const r = await runPs('tasks-info.ps1', ['-ScheduleTask', TASK_NAME, '-WatchdogTask', WATCHDOG_TASK]);
+  const r = await runPs('tasks-info.ps1', ['-ScheduleTask', TASK_NAME]);
   const d = parseLastJson(r.out);
   const s = d.schedule || {};
-  const w = d.watchdog || {};
   const target = String(s.target || '').trim();
   const schedule = {
     installed: !!s.installed,
@@ -374,17 +373,12 @@ async function readTasks() {
     target,
     nextRun: s.next || '',
     lastResult: s.lastResult,
-    pointsToPlugin: /dsh-weekly-report/i.test(target) && /gen_weekly_text\.py/i.test(target),
+    // 隐藏启动（wscript + vbs 包装）时 target 是 wscript.exe + vbs 路径，
+    // 真正的命令行在 command 里；任一处带引擎名都算指向本插件。
+    pointsToPlugin: (/dsh-weekly-report/i.test(target) && /gen_weekly_text\.py/i.test(target))
+      || /gen_weekly_text\.py/i.test(String(s.command || '')),
   };
-  const watchdog = {
-    taskName: WATCHDOG_TASK,
-    installed: !!w.installed,
-    state: w.state || '',
-    next: w.next || '',
-    target: String(w.target || '').trim(),
-    lastResult: w.lastResult,
-  };
-  return { schedule, watchdog };
+  return { schedule };
 }
 
 async function readSchedule(force = false) {
@@ -418,43 +412,6 @@ async function removeSchedule() {
   tasksCache = { at: 0, data: null, refreshing: false };
   refreshTasks();
   return { ok: !!d.ok, reason: d.reason || '', out: r.out.trim().slice(-300) };
-}
-
-// ---------------------------------------------------------------- 面板服务守护
-// 用 Windows 计划任务每 2 分钟探一次 /api/ping，不通就把服务拉起来。
-// 这样即使 DSH 没开、宿主插件没加载、服务被系统杀掉，面板也能自己回来。
-const WATCHDOG_TASK = '周报面板守护';
-
-async function readWatchdog() {
-  if (tasksCache.data) return tasksCache.data.watchdog;
-  const data = await readTasks();
-  tasksCache = { at: Date.now(), data, refreshing: false };
-  return data.watchdog;
-}
-
-async function installWatchdog() {
-  const r = await runPs('watchdog-install.ps1', [
-    '-TaskName', WATCHDOG_TASK,
-    '-Port', String(PORT),
-    '-Server', path.join(__dirname, 'server.cjs'),
-  ]);
-  const d = parseLastJson(r.out);
-  log(`watchdog install code=${r.code} ok=${!!d.ok}`);
-  tasksCache = { at: 0, data: null, refreshing: false };
-  refreshTasks();
-  return {
-    ok: !!d.ok, taskName: WATCHDOG_TASK, next: d.next || '',
-    out: (r.out || '').trim().slice(-600),
-  };
-}
-
-async function removeWatchdog() {
-  const r = await runPs('watchdog-remove.ps1', ['-TaskName', WATCHDOG_TASK]);
-  const d = parseLastJson(r.out);
-  log(`watchdog remove code=${r.code} ok=${!!d.ok}`);
-  tasksCache = { at: 0, data: null, refreshing: false };
-  refreshTasks();
-  return { ok: !!d.ok, reason: d.reason || '', out: (r.out || '').trim().slice(-300) };
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -531,7 +488,6 @@ function getTasks() {
     return {
       pending: true,
       schedule: { pending: true, installed: false, status: '', target: '', nextRun: '', pointsToPlugin: false },
-      watchdog: { pending: true, installed: false, state: '', next: '', target: '' },
     };
   }
   if (Date.now() - tasksCache.at > TASKS_TTL) refreshTasks();
@@ -545,7 +501,6 @@ async function collectState() {
   const tasks = getTasks();
   const key = P.readKey();
   const schedule = tasks.schedule;
-  const watchdog = tasks.watchdog;
   return {
     ok: true,
     version: VERSION,
@@ -565,7 +520,6 @@ async function collectState() {
     key: { present: !!key, masked: maskKey(key) },
     python: { path: py, ok: deps.ok, version: deps.version },
     schedule,
-    watchdog,
     checks: buildChecks(config, deps, schedule, key),
     notes: NOTES,
     reports: listReports(),
@@ -630,7 +584,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // 轻量探活：不碰磁盘、不 spawn 进程，1~2 ms 返回，给宿主心跳 / 侧边栏状态 / 守护任务用
+    // 轻量探活：不碰磁盘、不 spawn 进程，1~2 ms 返回，给宿主心跳 / 侧边栏状态用
     if ((req.method === 'GET' || req.method === 'HEAD') && (p === '/api/ping' || p === '/api/health')) {
       json(res, 200, {
         ok: true,
@@ -649,15 +603,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/api/watchdog') {
-      json(res, 200, { ok: true, watchdog: await readWatchdog() });
+      // v0.8.0：PowerShell 守护任务下线，服务改由宿主插件每 20 秒静默保活
+      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' });
       return;
     }
 
     if (req.method === 'POST' && p === '/api/watchdog') {
-      const body = JSON.parse(await readBody(req) || '{}');
-      const r = body.action === 'remove' ? await removeWatchdog() : await installWatchdog();
-      invalidateState();
-      json(res, r.ok ? 200 : 500, r);
+      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' });
       return;
     }
 
@@ -904,7 +856,7 @@ server.on('clientError', (err, socket) => {
   try { socket.destroy(); } catch (_) { /* ignore */ }
 });
 
-// 服务常驻：未捕获异常只记日志，不退出（真挂了交给守护任务拉起）
+// 服务常驻：未捕获异常只记日志，不退出（真挂了由宿主插件 20 秒心跳拉起）
 process.on('uncaughtException', (e) => {
   log('uncaughtException ' + ((e && e.stack) || e));
 });

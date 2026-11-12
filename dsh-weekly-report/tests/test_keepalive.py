@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""面板服务「保持在线」回归测试（v0.7.1）。
+"""面板服务「保持在线」回归测试（v0.8.0）。
 
 只动临时目录 + 测试端口，绝不碰 8798 上的正式服务。
 
@@ -7,7 +7,9 @@
   1. /api/ping 轻量探活（毫秒级、不 spawn 进程）
   2. /api/state 走缓存（首次也快），不会每次请求都 spawn powershell
   3. 端口被占用时，第二个实例自己退出（不会顶掉在跑的）
-  4. 服务被杀掉后，watchdog.ps1 能把它拉起来，并写一行 watchdog.log
+  4. /api/watchdog 已下线（v0.8.0 删掉 PowerShell 守护任务），只回 410
+  5. 宿主式静默拉起（node + detached + windowsHide，不带 powershell）能把被杀的服务拉回来
+  6. 计划任务的隐藏启动器（wscript + VBS，窗口样式 0）能跑完命令且不留窗口
 
 跑法：
     python dsh-weekly-report/tests/test_keepalive.py
@@ -26,7 +28,6 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
 SERVER = os.path.join(PLUGIN, "service", "server.cjs")
-WATCHDOG = os.path.join(PLUGIN, "service", "ps", "watchdog.ps1")
 PORT = int(os.environ.get("KEEPALIVE_PORT", "8899"))
 
 PASSED, FAILED = [], []
@@ -162,7 +163,18 @@ def main():
         check("第二个实例检测到端口占用后自行退出", code == 0, f"exit={code}")
         check("原实例仍在服务", json.loads(get("/api/ping")[1]).get("ok") is True)
 
-        # 杀掉服务 → watchdog 拉起
+        # v0.8.0：PowerShell 守护任务已下线，接口只回 410
+        try:
+            get("/api/watchdog", timeout=5)
+            wd_code = 200
+        except urllib.error.HTTPError as e:
+            wd_code = e.code
+        except Exception:
+            wd_code = -1
+        check("/api/watchdog 已下线（410）", wd_code == 410, f"HTTP {wd_code}")
+
+        # 杀掉服务 → 宿主式静默拉起（node + detached + windowsHide，不起 powershell）
+        ps_base = ps_count()
         kill(proc)
         procs.clear()
         time.sleep(1.5)
@@ -173,28 +185,38 @@ def main():
             down = True
         check("服务已被杀掉", down)
 
-        log_file = os.path.join(os.path.expanduser("~"), ".dsh", "weekly-report", "logs", "watchdog.log")
-        size_before = os.path.getsize(log_file) if os.path.isfile(log_file) else 0
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-File", WATCHDOG, "-Port", str(PORT), "-Server", SERVER],
-            capture_output=True, text=True, timeout=120,
+        out_log = open(os.path.join(tmp, "respawn.log"), "wb")
+        respawn = subprocess.Popen(
+            [node, SERVER], env=env, cwd=os.path.dirname(SERVER),
+            stdout=out_log, stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        check("watchdog 执行成功", r.returncode == 0, (r.stdout or r.stderr or "")[-200:])
-        check("watchdog 把服务拉回来了", wait_up(30))
+        procs.append(respawn)
+        check("宿主式不带窗口的拉起让服务回来", wait_up(30))
 
-        time.sleep(0.8)
-        size_after = os.path.getsize(log_file) if os.path.isfile(log_file) else 0
-        check("watchdog 写了日志", size_after > size_before, f"{size_before} -> {size_after}")
-
-        # 再跑一次：服务在 → 立刻退出、不写日志
-        size1 = size_after
-        r2 = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-File", WATCHDOG, "-Port", str(PORT), "-Server", SERVER],
-            capture_output=True, text=True, timeout=60,
-        )
-        check("服务在时 watchdog 空跑", r2.returncode == 0 and os.path.getsize(log_file) == size1)
+        # 隐藏启动器：wscript + VBS（窗口样式 0）跑命令 → 有副作用、桌面不弹窗
+        for exe in ("wscript.exe", "wscript"):
+            if shutil.which(exe) or os.path.isfile(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "wscript.exe")):
+                wscript = exe
+                break
+        else:
+            wscript = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "wscript.exe")
+        marker = os.path.join(tmp, "hidden-ok.txt")
+        child = os.path.join(tmp, "hidden_child.py")
+        with open(child, "w", encoding="utf-8") as f:
+            f.write("open(r'%s', 'w').write('ok')\n" % marker.replace("\\", "\\\\"))
+        command = '"%s" "%s"' % (sys.executable, child)
+        vbs = os.path.join(tmp, "run-hidden-test.vbs")
+        with open(vbs, "w", encoding="mbcs", errors="replace") as f:
+            f.write("Option Explicit\r\nDim sh\r\nSet sh = CreateObject(\"WScript.Shell\")\r\n")
+            f.write("sh.Run \"%s\", 0, True\r\n" % command.replace('"', '""'))
+        r3 = subprocess.run([wscript, "//nologo", vbs], capture_output=True, timeout=120)
+        check("隐藏启动器执行成功", os.path.isfile(marker), (r3.stderr or b"").decode("utf-8", "replace")[-200:])
+        # 拉起后服务自己会 spawn 一次 powershell 查计划任务（windowsHide，进程很快退出），
+        # 所以留 1 个容差；这里只防「常驻了一堆 powershell」这种回归。
+        time.sleep(3.0)
+        ps_after = ps_count()
+        check("拉起/隐藏执行都没有额外 powershell 常驻", ps_after <= ps_base + 1, f"{ps_base} -> {ps_after}")
     finally:
         # 收拾：先按 ping 报的 pid 精确杀掉（watchdog 拉起的那个进程是 detached 的）
         try:

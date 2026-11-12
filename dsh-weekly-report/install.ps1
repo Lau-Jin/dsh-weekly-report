@@ -23,8 +23,7 @@ param(
     [string]$ProfileRoot = "",
     [switch]$Uninstall,
     [switch]$Status,
-    [switch]$Copy,   # 不用 Junction，直接复制一份（插件目录会被移动时用；代价是改代码不即时生效）
-    [switch]$NoWatchdog  # 不装「面板服务守护」计划任务（默认装：每 2 分钟探活，挂了自动拉起）
+    [switch]$Copy   # 不用 Junction，直接复制一份（插件目录会被移动时用；代价是改代码不即时生效）
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,13 +89,10 @@ if ($Status) {
     $svc = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
            Where-Object { $_.CommandLine -match "weekly-report" }
     Write-Host ("service pid : " + (($svc | ForEach-Object { $_.ProcessId }) -join ", "))
+    # v0.8.0：不再有 PowerShell 守护任务；老版本残留按需提示一句
     $wd = Get-ScheduledTask -TaskName "周报面板守护" -ErrorAction SilentlyContinue
     if ($wd) {
-        $wi = Get-ScheduledTaskInfo -TaskName "周报面板守护" -ErrorAction SilentlyContinue
-        $next = if ($wi -and $wi.NextRunTime) { $wi.NextRunTime.ToString('yyyy-MM-dd HH:mm') } else { '' }
-        Write-Host ("watchdog   : installed (" + $wd.State + $(if ($next) { ", next $next" } else { '' }) + ")")
-    } else {
-        Write-Host "watchdog   : NOT installed (panel service won't restart by itself when DSH is closed)" -ForegroundColor Yellow
+        Write-Host "watchdog   : legacy task found — run .\install.ps1 -Uninstall once to clean it" -ForegroundColor Yellow
     }
     $dataDir = Join-Path $PluginDir "service\data"
     Write-Host ("data dir   : " + $dataDir + "  (exists: " + (Test-Path $dataDir) + ")")
@@ -132,7 +128,7 @@ if ($Uninstall) {
         }
     }
 
-    # 守护任务（v0.7.1 起默认安装）
+    # 老版本装的守护任务（v0.8.0 起不再安装，卸载时顺手清掉）
     $wd = Get-ScheduledTask -TaskName "周报面板守护" -ErrorAction SilentlyContinue
     if ($wd) {
         Unregister-ScheduledTask -TaskName "周报面板守护" -Confirm:$false -ErrorAction SilentlyContinue
@@ -237,21 +233,13 @@ if (Test-Path $ProfilePatch) {
     Write-Host "  WARN: $ProfilePatch not found, skipped" -ForegroundColor Yellow
 }
 
-# 4) 面板服务守护（每 2 分钟探活，挂了自动拉起；-NoWatchdog 可跳过）
-if ($NoWatchdog) {
-    Write-Host "  watchdog: skipped (-NoWatchdog)"
+# 4) 守护任务：v0.8.0 起不再安装（它要拉 powershell，控制台窗口每次闪一下）。
+#    服务改为由宿主插件每 20 秒静默探活（lib/index.js，windowsHide 无窗口），这里只清理旧任务。
+if (Get-ScheduledTask -TaskName "周报面板守护" -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName "周报面板守护" -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "  watchdog: legacy task 周报面板守护 removed (v0.8.0 uses the host keepalive)"
 } else {
-    $wdScript = Join-Path $PluginDir "service\ps\watchdog-install.ps1"
-    if (Test-Path $wdScript) {
-        try {
-            $r = & powershell -NoProfile -ExecutionPolicy Bypass -File $wdScript -TaskName "周报面板守护" 2>&1
-            Write-Host "  watchdog: installed (every 2 min -> http://127.0.0.1:8798/api/ping)"
-        } catch {
-            Write-Host "  WARN: watchdog install failed: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  WARN: watchdog-install.ps1 not found, skipped" -ForegroundColor Yellow
-    }
+    Write-Host "  watchdog: none (host plugin keeps the service alive silently)"
 }
 
 Write-Host ""
