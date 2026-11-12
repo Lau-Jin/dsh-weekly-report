@@ -150,12 +150,11 @@ window.__ModuleLoader__.load({
         stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round',
         'aria-hidden': 'true',
       },
-        h('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 2.4 }),
-        h('path', { d: 'M3.5 9.5h17' }),
-        h('path', { d: 'M8 3.5V6' }),
-        h('path', { d: 'M16 3.5V6' }),
-        h('path', { d: 'M7.5 13h4' }),
-        h('path', { d: 'M7.5 16.5h7' }),
+        // 「周报」= 一页报告（折角 + 正文行）+ 右下角状态点，和插件图标同一形象
+        h('path', { d: 'M7.2 3.4h6.9l4.9 4.9v10.1a1.6 1.6 0 0 1-1.6 1.6H7.2a1.6 1.6 0 0 1-1.6-1.6V5a1.6 1.6 0 0 1 1.6-1.6z' }),
+        h('path', { d: 'M14 3.4v5h5' }),
+        h('path', { d: 'M8.6 11.6h6.2' }),
+        h('path', { d: 'M8.6 15h4.2' }),
         h('circle', { cx: 19, cy: 19, r: 3.4, fill: color, stroke: 'var(--dsw-alias-bg-layer-1, #fff)', strokeWidth: 1.4 }))
     }
 

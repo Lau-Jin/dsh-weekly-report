@@ -59,6 +59,7 @@ html, body {
   flex: 0 0 auto;
 }
 .wr-brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 auto; }
+.wr-brand__logo { width: 20px; height: 20px; border-radius: 6px; flex: 0 0 auto; }
 .wr-brand__name { font-size: 14.5px; font-weight: 650; letter-spacing: .01em; white-space: nowrap; }
 .wr-status {
   display: inline-flex; align-items: center; gap: 5px;

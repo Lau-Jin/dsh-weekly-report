@@ -1,4 +1,4 @@
-﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.5）
+﻿# dsh-weekly-report · 周报面板插件（自主版 v0.7.6）
 
 **完全自主**：生成引擎、配置、API Key、输出目录全部在插件内，不再依赖 `D:\Reports` 里的脚本和配置。
 装进 DSH 后在**侧边栏**用，也能单独用浏览器打开。
@@ -27,7 +27,8 @@ DSH 侧边栏「周报」
 
 | 路径 | 作用 |
 |---|---|
-| `lib/index.js` | Host 半身：保证面板服务在跑（60 秒心跳，挂了自动拉起） |
+| `icon.svg` | 插件图标：插件页 / 面板 favicon / 顶栏 logo 都用它（`service/public/icon.svg` 是同一份） |
+| `lib/index.js` | Host 半身：保证面板服务在跑（20 秒心跳，挂了自动拉起，见「保持在线」） |
 | `lib/client.js` | 浏览器半身：主面板 + 侧边栏入口（图标带状态点） |
 | `service/server.cjs` | 面板服务（`127.0.0.1:8798`，仅 Node 标准库） |
 | `service/paths.cjs` | 路径与配置：插件自有目录、首次从旧位置迁移 |

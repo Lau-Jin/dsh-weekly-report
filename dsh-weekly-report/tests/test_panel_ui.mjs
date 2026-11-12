@@ -7,6 +7,7 @@
  *     路径卡、系统定时任务、面板服务守护、最近一次生成、历史
  *   · 开关状态按卡片分别记在 localStorage，刷新后保持
  *   · 系统定时任务按钮名称（不再出现「指向插件引擎」）
+ *   · 品牌图标：favicon 与顶栏 logo 用的是 /icon.svg，且能正常加载
  *
  * 跑法：
  *   node dsh-weekly-report/tests/test_panel_ui.mjs [--port 8798]
@@ -113,6 +114,11 @@ async function main() {
   await client.send('Runtime.enable')
   await client.send('Page.navigate', { url: BASE })
   await waitReady(client)
+  // 清掉上次跑测试留下的路径开关状态，保证从「默认全隐藏」开始
+  await evaluate(client, "window.localStorage.removeItem('wr-show-paths')")
+  await client.send('Page.reload', {})
+  await sleep(2500)
+  await waitReady(client)
 
   const state = async () => evaluate(client, `(() => {
     const btn = (k) => document.querySelector('[data-path-toggle="' + k + '"]');
@@ -197,6 +203,23 @@ async function main() {
   const schedBtn = await evaluate(client, "document.querySelector('#btn-sched-install').textContent.trim()")
   check('定时任务按钮名正确', schedBtn === '登记每周自动生成（周日 22:00）', schedBtn)
   check('页面不再出现「指向插件引擎」', !(await evaluate(client, "document.body.innerText")).includes('指向插件引擎'))
+
+  // 9.5 品牌图标：favicon + 顶栏 logo
+  check('页面声明了 favicon（/icon.svg）',
+    (await evaluate(client, "!!document.querySelector('link[rel=\"icon\"][href=\"/icon.svg\"]')")))
+  check('顶栏有品牌 logo（img.wr-brand__logo）',
+    (await evaluate(client, "!!document.querySelector('img.wr-brand__logo')")))
+  const iconOk = await evaluate(client, `(async () => {
+    const img = document.querySelector('img.wr-brand__logo');
+    if (!img) return { ok: false, reason: 'no img' };
+    if (!img.complete) await new Promise((r) => { img.addEventListener('load', r, { once: true }); img.addEventListener('error', r, { once: true }); });
+    const res = await fetch('/icon.svg');
+    const text = await res.text();
+    return { ok: img.naturalWidth > 0 && res.ok && text.trimStart().startsWith('<svg') && text.includes('viewBox'),
+             w: img.naturalWidth, type: res.headers.get('content-type'), head: text.slice(0, 40) };
+  })()`)
+  check('图标能加载且是合法 SVG（/icon.svg, image/svg+xml）',
+    iconOk.ok && /svg/.test(iconOk.type || ''), JSON.stringify(iconOk))
 
   // 10. 刷新后保持（各卡的状态各自恢复）
   await client.send('Page.reload', {})

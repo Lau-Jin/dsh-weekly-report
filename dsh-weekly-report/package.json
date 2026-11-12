@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "private": true,
   "type": "module",
   "description": "周报面板（自主版）：插件自带生成引擎与配置（引擎唯一真源），在侧边栏配置 API Key / 邮箱、一键生成周报、查看历史与注意事项。",
@@ -8,10 +8,12 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "lib",
+    "icon.svg",
     "service/server.cjs",
     "service/paths.cjs",
     "service/engine",
@@ -37,5 +39,6 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "icon": "./icon.svg"
 }

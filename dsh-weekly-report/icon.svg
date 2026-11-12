@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="周报">
+  <defs>
+    <linearGradient id="wrIconBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#2450c8"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#wrIconBg)"/>
+  <path d="M22.5 14.5h13.2l8.3 8.3v22.7a4 4 0 0 1-4 4H22.5a4 4 0 0 1-4-4v-27a4 4 0 0 1 4-4z" fill="#ffffff" opacity="0.96"/>
+  <path d="M35.7 14.5v8.3h8.3" fill="#dbe5ff"/>
+  <g stroke="#2c5ce0" stroke-width="3" stroke-linecap="round">
+    <path d="M25.5 29.5h12.5"/>
+    <path d="M25.5 35.5h12.5"/>
+    <path d="M25.5 41.5h7"/>
+  </g>
+  <circle cx="44.5" cy="45.5" r="10.5" fill="#1fae63"/>
+  <path d="M39.8 45.6l3.4 3.4 6.2-6.6" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
