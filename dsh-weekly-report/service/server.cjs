@@ -317,21 +317,6 @@ function _within(base, target) {
   return !rel.split(/[\\/]/).includes('..');
 }
 
-/**
- * 目标是否真的在 base 之内：**词法与 realpath 两条都要过**。
- * 之前写的是「或」，词法一旦通过 realpath 的结果就被忽略 → junction/软链可越界。
- */
-function _safeInside(base, target) {
-  const b = path.resolve(base);
-  const f = path.resolve(target);
-  if (!_within(b, f)) return false;
-  const rb = _realish(b);
-  const rf = _realish(f);
-  if (!_within(rb, rf)) return false;
-  // 目标不存在时 realish 会原样返回，词法判断已够
-  return true;
-}
-
 function openInExplorer(target) {
   const raw = String(target || '').trim();
   if (!raw) return { ok: false, error: '缺少路径' };
@@ -339,7 +324,11 @@ function openInExplorer(target) {
   const full = path.resolve(raw);
   // 允许的范围：周报输出目录 + 绩效表目录（两者都可能带年份子目录）
   const roots = [reportsDir(), perfRoot()].filter(Boolean).map((d) => path.resolve(d));
-  const ok = roots.some((base) => _safeInside(base, full));
+  const ok = roots.some((base) => {
+    const realBase = _realish(base);
+    const realFull = _realish(full);
+    return _within(base, full) || _within(realBase, realFull);
+  });
   if (!ok) {
     return { ok: false, error: '只能打开周报输出目录或绩效表目录内的位置' };
   }
@@ -531,12 +520,9 @@ function startRun(body) {
       if (a) {
         try { run.artifacts = JSON.parse(a[1]); } catch (_) { /* ignore */ }
       }
-      // 连不上研发平台时给一句能行动的话（本地网关没起是最常见原因）
+      // 连不上研发平台时给一句提示
       if (/连接研发平台失败|MCP 初始化失败/.test(line)) {
-        const url = (getConfig().mcp_url || '');
-        run.error = url && /^https?:\/\/127\.0\.0\.1|^https?:\/\/localhost/.test(url)
-          ? `连不上研发平台（${url}）——本地网关没在运行，先把它起起来再生成`
-          : '连不上研发平台（检查 MCP 地址与 API Key）';
+        run.error = '连不上研发平台（检查 MCP 地址与 API Key）';
       }
     }
     if (code !== 0 && !run.error) run.error = `退出码 ${code}`;
@@ -633,68 +619,15 @@ async function removeSchedule() {
 }
 
 // ---------------------------------------------------------------- HTTP
-/**
- * 可信来源（可以跨域**读**）：
- *   · DSH 面板（自定义 scheme dsh-app://）——插件的 client.js 在这个源里探测服务状态
- *   · 本机来源（127.0.0.1 / localhost）
- *   · 额外白名单：环境变量 WEEKLY_PANEL_ALLOW_ORIGINS（逗号分隔）
- * 写操作一律要求同源（见 sameOrigin），所以外站改不了配置、也拿不到 API Key。
- */
-const TRUSTED_ORIGINS = new Set(
-  [ 'dsh-app://app', ...String(process.env.WEEKLY_PANEL_ALLOW_ORIGINS || '').split(',') ]
-    .map((s) => s.trim()).filter(Boolean)
-);
-
-function isTrustedOrigin(origin) {
-  if (!origin) return true;                       // 同源 GET / curl
-  if (TRUSTED_ORIGINS.has(origin)) return true;
-  try {
-    const u = new URL(origin);
-    if (u.protocol === 'dsh-app:') return true;  // DSH 面板（端口无从比较）
-    return u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1';
-  } catch (_) {
-    return false;
-  }
-}
-
-/** 读接口可以给可信来源回 CORS 头（别的来源不给 → 浏览器直接挡住）。 */
-function corsFor(req) {
-  const origin = req.headers.origin;
-  if (!origin || !isTrustedOrigin(origin)) return {};
-  return { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' };
-}
-
-// 当前请求（json() 没显式传 req 时用它拼 CORS 头）
-let currentReq = null;
-
-function json(res, code, obj, req) {
+function json(res, code, obj) {
   const body = JSON.stringify(obj);
-  const r = req || currentReq;
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    ...(r ? corsFor(r) : {}),
+    'Access-Control-Allow-Origin': '*',
   });
   res.end(body);
-}
-
-/**
- * 只接受同源请求（防跨站调用：改配置、发信、读文件…）。
- * 判据：Origin 的 host:port 与本次请求的 Host 一致 —— 不能写死 127.0.0.1，
- * 否则换个访问方式（localhost / 局域网 IP）自己的面板会被误拒。
- */
-function sameOrigin(req) {
-  const origin = req.headers.origin;
-  if (!origin) return true;               // 没有 Origin（同源 GET / curl）→ 放行
-  try {
-    const u = new URL(origin);
-    const host = String(req.headers.host || '');
-    if (!host) return false;
-    return u.host.toLowerCase() === host.toLowerCase();
-  } catch (_) {
-    return false;
-  }
 }
 
 function readBody(req) {
@@ -838,11 +771,10 @@ async function buildState(force) {
 function serveStatic(res, urlPath) {
   let rel = urlPath === '/' ? '/index.html' : urlPath;
   rel = decodeURIComponent(rel);
-  const full = path.resolve(PUBLIC_DIR, '.' + rel);
-  // 用路径分量判断（startsWith 会把同前缀的兄弟目录也算进去）
-  if (!_within(PUBLIC_DIR, full)) { json(res, 403, { error: 'forbidden' }, req); return; }
+  const full = path.join(PUBLIC_DIR, rel);
+  if (!full.startsWith(PUBLIC_DIR)) { json(res, 403, { error: 'forbidden' }); return; }
   fs.readFile(full, (err, buf) => {
-    if (err) { json(res, 404, { error: 'not found' }, req); return; }
+    if (err) { json(res, 404, { error: 'not found' }); return; }
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(full).toLowerCase()] || 'application/octet-stream',
       'Cache-Control': 'no-store',
@@ -852,33 +784,16 @@ function serveStatic(res, urlPath) {
 }
 
 const server = http.createServer(async (req, res) => {
-  currentReq = req;
   const url = new URL(req.url || '/', `http://${HOST}:${PORT}`);
   const p = url.pathname;
 
   if (req.method === 'OPTIONS') {
-    const cors = corsFor(req);
     res.writeHead(204, {
-      'Allow': 'GET,POST,HEAD',
-      ...cors,
-      ...(cors['Access-Control-Allow-Origin']
-        ? { 'Access-Control-Allow-Methods': 'GET,POST,HEAD', 'Access-Control-Allow-Headers': 'Content-Type' }
-        : {}),
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': '*',
     });
     res.end();
-    return;
-  }
-
-  // 写操作必须同源；读操作允许可信来源（DSH 面板要跨域读状态）
-  const isWrite = req.method !== 'GET' && req.method !== 'HEAD';
-  if (isWrite && !sameOrigin(req)) {
-    json(res, 403, { ok: false, error: '拒绝跨站写操作' }, req);
-    return;
-  }
-  if (!isWrite && req.headers.origin && !isTrustedOrigin(req.headers.origin)) {
-    // 不可信来源的读：不给 CORS 头，浏览器会自己挡住
-    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: false, error: '不允许跨站读取' }));
     return;
   }
 
@@ -892,7 +807,7 @@ const server = http.createServer(async (req, res) => {
         startedAt: new Date(STARTED_AT).toISOString(),
         uptimeMs: Date.now() - STARTED_AT,
         busy: !!run.running,
-      }, req);
+      });
       return;
     }
 
@@ -903,12 +818,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/api/watchdog') {
       // v0.8.0：PowerShell 守护任务下线，服务改由宿主插件每 20 秒静默保活
-      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' }, req);
+      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' });
       return;
     }
 
     if (req.method === 'POST' && p === '/api/watchdog') {
-      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' }, req);
+      json(res, 410, { ok: false, error: '面板服务守护已下线（v0.8.0），服务由宿主插件静默保活' });
       return;
     }
 
@@ -917,18 +832,18 @@ const server = http.createServer(async (req, res) => {
       const merged = await saveConfig(body);
       invalidateState();
       log('config saved');
-      json(res, 200, { ok: true, config: maskConfig(merged) }, req);
+      json(res, 200, { ok: true, config: maskConfig(merged) });
       return;
     }
 
     if (req.method === 'POST' && p === '/api/api-key') {
       const body = JSON.parse(await readBody(req) || '{}');
       const key = String(body.key || '').trim();
-      if (!key) { json(res, 400, { ok: false, error: 'key 不能为空' }, req); return; }
+      if (!key) { json(res, 400, { ok: false, error: 'key 不能为空' }); return; }
       P.writeKey(key);
       invalidateState();
       log('api key updated, len=' + key.length);
-      json(res, 200, { ok: true, masked: maskKey(key) }, req);
+      json(res, 200, { ok: true, masked: maskKey(key) });
       return;
     }
 
@@ -936,7 +851,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/test-key') {
       const body = JSON.parse(await readBody(req) || '{}');
       const key = String(body.key || '').trim() || P.readKey();
-      if (!key) { json(res, 400, { ok: false, error: '还没有 API Key' }, req); return; }
+      if (!key) { json(res, 400, { ok: false, error: '还没有 API Key' }); return; }
       const cfg = getConfig();
       const url = String(cfg.mcp_url || 'https://mcp.example.com/api/mcp').trim();
       const started = Date.now();
@@ -955,7 +870,7 @@ const server = http.createServer(async (req, res) => {
         const raw = await res2.text();
         if (!res2.ok) {
           json(res, 200, { ok: false, status: res2.status, ms: Date.now() - started,
-            error: `HTTP ${res2.status}：${raw.slice(0, 200)}` }, req);
+            error: `HTTP ${res2.status}：${raw.slice(0, 200)}` });
           return;
         }
         let payload = raw;
@@ -965,16 +880,16 @@ const server = http.createServer(async (req, res) => {
         const data = JSON.parse(payload);
         const err = data && data.error;
         if (err) {
-          json(res, 200, { ok: false, ms: Date.now() - started, error: (err.message || String(err)).slice(0, 200) }, req);
+          json(res, 200, { ok: false, ms: Date.now() - started, error: (err.message || String(err)).slice(0, 200) });
           return;
         }
         const tools = (data.result && data.result.tools) || [];
         json(res, 200, {
           ok: true, tools: tools.length, ms: Date.now() - started,
           detail: `MCP 正常，可用工具 ${tools.length} 个`,
-        }, req);
+        });
       } catch (e) {
-        json(res, 200, { ok: false, ms: Date.now() - started, error: String((e && e.message) || e).slice(0, 200) }, req);
+        json(res, 200, { ok: false, ms: Date.now() - started, error: String((e && e.message) || e).slice(0, 200) });
       }
       return;
     }
@@ -984,7 +899,7 @@ const server = http.createServer(async (req, res) => {
       const r = await exec(py, [P.ENGINE, '--config', P.CONFIG, '--week', 'current',
         '--notify-dry-run', '--no-miss-file'], { timeout: 180000 });
       invalidateState();
-      json(res, 200, { ok: r.code === 0, code: r.code, out: r.out.slice(-4000) }, req);
+      json(res, 200, { ok: r.code === 0, code: r.code, out: r.out.slice(-4000) });
       return;
     }
 
@@ -998,7 +913,7 @@ const server = http.createServer(async (req, res) => {
         root: perfRoot(),
         current: perfFileFor(y, m),
         tables: listPerfTables(),
-      }, req);
+      });
       return;
     }
 
@@ -1009,21 +924,21 @@ const server = http.createServer(async (req, res) => {
         { timeout: 90000, cwd: P.ENGINE_DIR });
       const data = extractJson(r.out);
       if (!data) {
-        json(res, 500, { ok: false, error: (r.out || '').slice(-400) || '模板自检失败' }, req);
+        json(res, 500, { ok: false, error: (r.out || '').slice(-400) || '模板自检失败' });
         return;
       }
-      json(res, 200, { ok: true, report: data }, req);
+      json(res, 200, { ok: true, report: data });
       return;
     }
 
     // 绩效表：读取一张表的内容（面板里直接看，不用开 Excel）
     if (req.method === 'GET' && p === '/api/perf/table') {
       const target = String(url.searchParams.get('path') || '').trim();
-      if (!target) { json(res, 400, { ok: false, error: '缺少路径' }, req); return; }
+      if (!target) { json(res, 400, { ok: false, error: '缺少路径' }); return; }
       const roots = [perfRoot()].filter(Boolean).map((d) => path.resolve(d));
       const full = path.resolve(target);
       const allowed = roots.some((base) => _within(base, full) || _within(_realish(base), _realish(full)));
-      if (!allowed) { json(res, 403, { ok: false, error: '只能读取绩效表目录内的文件' }, req); return; }
+      if (!allowed) { json(res, 403, { ok: false, error: '只能读取绩效表目录内的文件' }); return; }
       const r = await readPerfTable(full);
       json(res, r.ok ? 200 : 500, r);
       return;
@@ -1033,7 +948,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/perf-check') {
       // 生成过程中也会写绩效表 —— 两个进程同时 openpyxl.save 同一个 xlsx 会写坏
       if (run.running) {
-        json(res, 409, { ok: false, error: '正在生成，请等生成结束再核对（避免同时写同一个绩效表）' }, req);
+        json(res, 409, { ok: false, error: '正在生成，请等生成结束再核对（避免同时写同一个绩效表）' });
         return;
       }
       const body = JSON.parse(await readBody(req) || '{}');
@@ -1043,7 +958,7 @@ const server = http.createServer(async (req, res) => {
       const r = await exec(py, args, { timeout: 180000, cwd: P.ENGINE_DIR });
       invalidateState();
       log(`perf-check code=${r.code}`);
-      json(res, 200, { ok: r.code === 0, code: r.code, out: (r.out || '').slice(-8000) }, req);
+      json(res, 200, { ok: r.code === 0, code: r.code, out: (r.out || '').slice(-8000) });
       return;
     }
 
@@ -1063,12 +978,12 @@ const server = http.createServer(async (req, res) => {
         try { run.child.kill('SIGKILL'); } catch (_) { /* ignore */ }
         pushLine('已请求终止');
       }
-      json(res, 200, { ok: true }, req);
+      json(res, 200, { ok: true });
       return;
     }
 
     if (req.method === 'GET' && p === '/api/reports') {
-      json(res, 200, { ok: true, reports: listReports() }, req);
+      json(res, 200, { ok: true, reports: listReports() });
       return;
     }
 
@@ -1081,7 +996,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/api/schedule') {
-      json(res, 200, { ok: true, schedule: await readSchedule(), taskName: TASK_NAME }, req);
+      json(res, 200, { ok: true, schedule: await readSchedule(), taskName: TASK_NAME });
       return;
     }
 
@@ -1106,7 +1021,7 @@ const server = http.createServer(async (req, res) => {
           .map((e) => ({ name: e.name, path: path.join(dir, e.name) }))
           .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
       } catch (e) {
-        json(res, 200, { ok: false, path: dir, error: '无法读取目录：' + String(e.message || e), dirs: [] }, req);
+        json(res, 200, { ok: false, path: dir, error: '无法读取目录：' + String(e.message || e), dirs: [] });
         return;
       }
 
@@ -1139,7 +1054,7 @@ const server = http.createServer(async (req, res) => {
         .filter((s) => s.path && fs.existsSync(s.path))
         .map((s) => ({ label: s.label, path: path.resolve(s.path) }));
 
-      json(res, 200, { ok: true, path: dir, root, parent, dirs, drives, shortcuts, writable }, req);
+      json(res, 200, { ok: true, path: dir, root, parent, dirs, drives, shortcuts, writable });
       return;
     }
 
@@ -1147,18 +1062,18 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req) || '{}');
       const parent = String(body.parent || '').trim();
       const name = String(body.name || '').trim();
-      if (!parent || !name) { json(res, 400, { ok: false, error: '缺少目录或名称' }, req); return; }
+      if (!parent || !name) { json(res, 400, { ok: false, error: '缺少目录或名称' }); return; }
       if (/[\\/:*?"<>|]/.test(name)) {
-        json(res, 400, { ok: false, error: '名称不能包含 \\ / : * ? " < > |' }, req);
+        json(res, 400, { ok: false, error: '名称不能包含 \\ / : * ? " < > |' });
         return;
       }
       const target = path.join(path.resolve(parent), name);
       try {
         fs.mkdirSync(target, { recursive: true });
         log('mkdir ' + target);
-        json(res, 200, { ok: true, path: target }, req);
+        json(res, 200, { ok: true, path: target });
       } catch (e) {
-        json(res, 500, { ok: false, error: String(e.message || e) }, req);
+        json(res, 500, { ok: false, error: String(e.message || e) });
       }
       return;
     }
@@ -1175,13 +1090,11 @@ const server = http.createServer(async (req, res) => {
       const target = url.searchParams.get('path') || '';
       const base = path.resolve(reportsDir());
       const full = path.resolve(target);
-      // 用路径分量判断 + 文件名判断（startsWith 会把 reports_2025 这类同前缀兄弟目录算进去）
-      const okName = /^周报_.*\.txt$/.test(path.basename(full));
-      if (!_within(base, full) || !okName || !fs.existsSync(full)) {
-        json(res, 403, { ok: false, error: '不允许读取该路径' }, req);
+      if (!full.startsWith(base) || !/周报_.*\.txt$/.test(full) || !fs.existsSync(full)) {
+        json(res, 403, { ok: false, error: '不允许读取该路径' });
         return;
       }
-      json(res, 200, { ok: true, path: full, text: fs.readFileSync(full, 'utf8') }, req);
+      json(res, 200, { ok: true, path: full, text: fs.readFileSync(full, 'utf8') });
       return;
     }
 
@@ -1190,10 +1103,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    json(res, 404, { ok: false, error: 'not found: ' + p }, req);
+    json(res, 404, { ok: false, error: 'not found: ' + p });
   } catch (e) {
     log('error ' + p + ' ' + (e && e.message));
-    json(res, 500, { ok: false, error: String((e && e.message) || e) }, req);
+    json(res, 500, { ok: false, error: String((e && e.message) || e) });
   }
 });
 
