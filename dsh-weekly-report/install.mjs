@@ -291,7 +291,7 @@ function restoreLegacyHost() {
   if (!st.bridgedServer || !st.bridgedBackup) return { ok: true, detail: '无需恢复' };
   // 转发文件所在目录已经是本包自身（比如仓库检出后来成了安装路径）：这个文件就是
   // 本包的正式 server.cjs，绝不能拿旧版备份去覆盖它。
-  if (path.resolve(path.dirname(st.bridgedServer)) === path.resolve(PLUGIN_DIR)) {
+  if (path.resolve(path.dirname(st.bridgedServer), '..') === path.resolve(PLUGIN_DIR)) {
     return { ok: true, detail: '心跳路径已并入本包，无需恢复' };
   }
   let text = '';
@@ -405,13 +405,22 @@ async function doVerify() {
   let bridged = true;
   let bridgeNote = st.bridgedServer ? '' : '全新安装，无需兼容';
   if (st.bridgedServer) {
-    // 转发文件所在目录已并入本包（安装路径 == 心跳路径）：心跳直接执行本包 server，免转发即达标。
-    if (path.resolve(path.dirname(st.bridgedServer)) === path.resolve(PLUGIN_DIR)) {
+    const bridgePkg = readJson(path.join(path.dirname(st.bridgedServer), '..', 'package.json'));
+    const ownVersion = readJson(path.join(PLUGIN_DIR, 'package.json'))?.version || '';
+    const cmpVer = (a, b) => String(a).split('.').map(Number).reduce((acc, x, i) => acc || x - (String(b).split('.')[i] | 0), 0);
+    let text = '';
+    try { text = fs.readFileSync(st.bridgedServer, 'utf8'); } catch { text = ''; }
+    if (text.includes('weekly-report-studio bridge')) {
       bridged = true;
-      bridgeNote = '心跳路径已并入本包，直跑本包 server';
+      bridgeNote = '心跳路径已转发到新包';
+    } else if (bridgePkg && bridgePkg.name === 'dsh-weekly-report'
+      && cmpVer(bridgePkg.version || '0.0.0', ownVersion || '0.0.0') >= 0) {
+      // 心跳路径本身已是本插件同版或更新（安装路径 == 心跳路径，或仓库检出接管了旧路径）：
+      // 免转发即达标，绝不能拿旧版备份去覆盖它。
+      bridged = true;
+      bridgeNote = `心跳路径已是本插件 v${bridgePkg.version || '?'}，直跑正式 server`;
     } else {
-      try { bridged = fs.readFileSync(st.bridgedServer, 'utf8').includes('weekly-report-studio bridge'); }
-      catch { bridged = false; }
+      bridged = false;
     }
   }
   rec('旧宿主兼容转发', bridged, bridgeNote);
