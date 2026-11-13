@@ -11,7 +11,7 @@
 
   const S = {
     state: null, view: 'overview', period: 'current', reports: [],
-    selected: '', fsTarget: '', fsPath: '', runTimer: 0, tplText: '', previewReal: false,
+    selected: '', fsTarget: '', fsPath: '', runTimer: 0, tplText: '',
   };
 
   async function api(url, options) {
@@ -189,12 +189,13 @@
   }
 
   // ---------------------------------------------------------------- 模板
-  /** 概览预览用的示例数据；真实生成时这些值全部由工单/任务数据替换。 */
+  /** 概览预览用的通用示例数据：全部为脱敏占位值，不含任何真实学校、链接或工单编号；
+   *  实际生成时这些字段全部由本周工单/任务数据替换。 */
   const SAMPLE_ITEM = {
-    category: '项目运维', school: '四川传媒学院', time: '2026年11月9日',
-    subject: '帆软报表健康巡检异常提示',
-    work: 'https://yanfa.scedu.tech/?tab=ticket-detail&ticketId=195',
-    note: '无', progress: '100%',
+    category: '【类别示例】', school: '×× 学校（示例）', time: '2026年11月9日 - 11月15日',
+    subject: '某系统例行巡检（示例事项）',
+    work: 'https://example.com/ticket/0000（示例链接）',
+    note: '无（示例）', progress: '80%（示例）',
   };
 
   function renderFormatPreview(template, label) {
@@ -212,30 +213,8 @@
     $('#f-template').value = r.text;
     const keys = Array.from(new Set((r.text.match(/\{\{\w+\}\}/g) || [])));
     $('#tpl-chips').innerHTML = keys.map((k) => `<span class="ws-chip">${esc(k)}</span>`).join('');
-    if (!S.previewReal) renderFormatPreview(r.text, r.builtin ? '内置模板 · 示例值' : '自定义模板 · 示例值');
+    renderFormatPreview(r.text, r.builtin ? '当前模板 · 通用示例值' : '自定义模板 · 通用示例值');
   }
-
-  /** 切换到最近一份真实周报的首条记录，直观看出字段值不是写死的。 */
-  $('#btn-format-real').addEventListener('click', async () => {
-    const btn = $('#btn-format-real');
-    if (S.previewReal) {
-      S.previewReal = false;
-      btn.textContent = '看真实数据';
-      const t = await api('/api/template');
-      if (t.ok) renderFormatPreview(t.text, t.builtin ? '内置模板 · 示例值' : '自定义模板 · 示例值');
-      return;
-    }
-    const list = await api('/api/reports');
-    const first = (list.reports || [])[0];
-    if (!first) { toast('还没有历史周报，先生成一份再来看', 'warn'); return; }
-    const r = await api('/api/report?path=' + encodeURIComponent(first.path));
-    if (!r.ok) { toast(r.error || '读取周报失败', 'err'); return; }
-    const block = String(r.text).replace(/\r/g, '').trim().split(/\n\s*\n/)[0] || '（这份周报没有内容）';
-    $('#format-preview').textContent = block;
-    $('#format-source').textContent = '真实周报 · ' + first.name;
-    S.previewReal = true;
-    btn.textContent = '返回模板示例';
-  });
 
   // ---------------------------------------------------------------- 设置保存
   async function saveSettings() {
@@ -271,8 +250,6 @@
       const r = await post('/api/config', { config: cfg });
       if (!r.ok) throw new Error(r.error || '配置保存失败');
       toast('设置已保存');
-      S.previewReal = false;
-      $('#btn-format-real').textContent = '看真实数据';
       await loadState();
       await loadTemplate();
     } catch (e) { toast(e.message || '保存失败', 'err'); }

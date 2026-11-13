@@ -222,6 +222,9 @@ try {
   // 概览预览跟随设置里的模板，且明确说明字段不是固定的
   ok('概览预览使用当前生效模板', /renderFormatPreview\(r\.text/.test(jsText) && !/format-preview[^\n]*builtinText/.test(jsText), '');
   ok('界面说明字段来自工单数据', htmlText.includes('format-desc') && /不是固定的/.test(htmlText), '');
+  // 预览必须用脱敏示例值：不含真实域名/工单号，也不提供「看真实数据」入口
+  ok('概览预览为脱敏示例值', /SAMPLE_ITEM[\s\S]*?school:\s*'×× 学校（示例）'/.test(jsText) && /example\.com/.test(jsText)
+    && !/yanfa\.scedu\.tech|ticketId=/.test(jsText) && !/btn-format-real|看真实数据/.test(jsText) && !/看真实数据|btn-format-real/.test(htmlText), '');
   ok('设置里可指定绩效表模板', htmlText.includes('id="f-perf-template"') && /perf_template/.test(jsText), '');
   ok('面板可检测表格结构', htmlText.includes('id="btn-perf-layout"') && /\/api\/perf-layout/.test(jsText), '');
   ok('结构识别结果有可读表格样式', /\.ws-kv/.test(cssText), '');
