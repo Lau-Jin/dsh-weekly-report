@@ -1,21 +1,11 @@
 /**
- * 插件路径与配置
+ * 周报工作台 · 路径与配置层（CommonJS，零第三方依赖）
  *
- * 代码可以两种方式装（数据位置不受影响）：
- *   A. 本地检出 + Junction（改代码即时生效）
- *   B. 在 DSH 插件页填仓库地址（pnpm 依赖，装进 node_modules）
- *
- * 无论哪种，**数据永远在同一个用户目录**，避免「两套配置 / 两套历史」：
- *   %USERPROFILE%\.dsh\weekly-report\
- *     ├── config.json    插件配置（含 SMTP 授权码）
- *     ├── api-key.txt    研发平台 API Key
- *     ├── reports/       默认周报输出目录
- *     └── logs/          运行日志
- * 可用环境变量 WEEKLY_PANEL_DATA 覆盖。
- *
- * 首次启动会按顺序尝试迁移旧位置（只读）：
- *   1. <插件>/service/data（旧版 Junction 安装的数据目录）
- *   2. D:\Reports\weekly_config.json + api_key.txt（更早的桌面版）
+ * 设计原则（v1.0 完整化）：
+ *   1. 数据目录与代码目录彻底分离，包整体可搬走 / 可分发；
+ *   2. 默认配置不含任何凭据、本机绝对路径或个人信息；
+ *   3. 所有真实路径（输出目录 / 绩效表 / 自定义模板）由使用者在面板提供后写入配置；
+ *   4. 配置与 Key 写前备份、原子落盘，损坏文件不静默覆盖。
  */
 'use strict';
 
@@ -23,32 +13,29 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const SERVICE_DIR = __dirname;                       // .../dsh-weekly-report/service
-const PLUGIN_DIR = path.resolve(SERVICE_DIR, '..');  // .../dsh-weekly-report
+const SERVICE_DIR = __dirname;
+const PLUGIN_DIR = path.resolve(SERVICE_DIR, '..');
 const ENGINE_DIR = path.join(SERVICE_DIR, 'engine');
-const ENGINE = path.join(ENGINE_DIR, 'gen_weekly_text.py');
+const ENGINE = path.join(ENGINE_DIR, 'gen-weekly.mjs');
+const PUBLIC_DIR = path.join(SERVICE_DIR, 'public');
+const TEMPLATE_FILE = path.join(ENGINE_DIR, 'templates', '周报模板.txt');
 
-function writable(dir) {
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.accessSync(dir, fs.constants.W_OK);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-/** 数据目录：始终在用户目录，和安装方式无关。 */
+/** 数据目录：用户目录优先，可用 WEEKLY_PANEL_DATA / WEEKLY_DATA_DIR 覆盖。 */
 function pickDataDir() {
-  const userHome = process.env.USERPROFILE || os.homedir();
+  const home = process.env.USERPROFILE || os.homedir();
   const candidates = [
     process.env.WEEKLY_PANEL_DATA,
-    path.join(userHome, '.dsh', 'weekly-report'),
+    process.env.WEEKLY_DATA_DIR,
+    path.join(home, '.dsh', 'weekly-report'),
     path.join(os.homedir(), '.dsh', 'weekly-report'),
     path.join(os.tmpdir(), 'dsh-weekly-report'),
   ].filter(Boolean);
   for (const dir of candidates) {
-    if (writable(dir)) return path.resolve(dir);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return path.resolve(dir);
+    } catch { /* 换下一个 */ }
   }
   return path.join(os.tmpdir(), 'dsh-weekly-report');
 }
@@ -59,217 +46,237 @@ const KEY = path.join(DATA_DIR, 'api-key.txt');
 const REPORTS = path.join(DATA_DIR, 'reports');
 const LOGS = path.join(DATA_DIR, 'logs');
 
-/** 旧位置 1：插件目录内的 service/data（Junction 版之前的默认） */
-const LEGACY_PLUGIN_DATA = path.join(SERVICE_DIR, 'data');
-/** 旧位置 2：更早的桌面版 */
-const LEGACY_DIR = process.env.WEEKLY_LEGACY_DIR || 'D:\\Desktop\\工作记录';
-const LEGACY_CONFIG = path.join(LEGACY_DIR, 'weekly_config.json');
-const LEGACY_KEY = path.join(LEGACY_DIR, 'api_key.txt');
-
 function ensureDirs() {
   for (const dir of [DATA_DIR, REPORTS, LOGS]) {
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* ignore */ }
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
   }
 }
 
-/** 读 JSON。返回 { ok, data, error } —— 区分「文件不存在」与「文件损坏」。
-
- * 以前损坏也返回 null，loadConfig 会当成"没有配置" → 静默用默认值覆盖，
- * 把输出目录、绩效表目录、邮箱授权码全重置掉。
- */
-function readJson(file) {
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { ok: false, missing: true, data: null, error: null };
-    return { ok: false, missing: false, data: null, error: String((e && e.message) || e) };
-  }
-  try {
-    return { ok: true, missing: false, data: JSON.parse(raw), error: null };
-  } catch (e) {
-    return { ok: false, missing: false, data: null, error: `JSON 解析失败：${e.message}` };
-  }
-}
-
-function ts() {
+function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-/** 插件默认配置：路径一律用绝对路径（数据在用户目录，和引擎所在位置无关） */
+/** 备份一份再覆盖；备份失败不阻断主流程。 */
+function backup(file) {
+  try {
+    if (!fs.existsSync(file)) return null;
+    const dst = `${file}.bak-${stamp()}`;
+    fs.copyFileSync(file, dst);
+    return dst;
+  } catch { return null; }
+}
+
+function atomicWrite(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  backup(file);
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+/** 全新安装的默认配置：邮件关闭、SMTP 全空、无凭据、无个人姓名。 */
 function defaultConfig() {
   return {
     token_file: KEY,
     out_dir: REPORTS,
-    folder: 'D:\\Desktop\\绩效\\绩效表\\2026',
-    handler: '张三',
+    folder: '',
+    perf_template: '',
+    perf_allow_insert: false,
+    report_template: '',
+    handler: '',
     threshold: 0.85,
-    mcp_url: 'https://mcp.example.com/api/mcp',
-    confirm: {
-      send_mail: false,
-      imap_host: '',
-      imap_port: 993,
-      lookback_days: 14,
-      subject_keyword: '周报',
-    },
+    mcp_url: 'https://yanfa.scedu.tech/api/mcp',
+    confirm: { send_mail: false, imap_host: '', imap_port: 993, lookback_days: 14, subject_keyword: '周报' },
     notify: {
       enabled: false,
       webhook_url: '',
       webhook_type: 'wecom',
-      smtp: {
-        host: 'smtp.163.com',
-        port: 465,
-        ssl: true,
-        starttls: false,
-        user: '',
-        password: '',
-        to: [],
-      },
+      smtp: { host: '', port: 465, ssl: true, starttls: false, user: '', password: '', to: [] },
     },
   };
 }
 
-/** 把旧数据目录里的东西搬到 DATA_DIR（不覆盖已有文件）。返回搬了哪些。 */
-function migrateFromDir(srcDir) {
-  const moved = [];
-  if (!srcDir || !fs.existsSync(srcDir)) return moved;
-  const walk = (dir, rel) => {
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
-    for (const e of entries) {
-      const from = path.join(dir, e.name);
-      const to = path.join(DATA_DIR, rel, e.name);
-      if (e.isDirectory()) {
-        try { fs.mkdirSync(to, { recursive: true }); } catch (_) { /* ignore */ }
-        walk(from, path.join(rel, e.name));
-        continue;
-      }
-      if (fs.existsSync(to)) continue;           // 目标已有 → 不覆盖
-      try {
-        fs.mkdirSync(path.dirname(to), { recursive: true });
-        fs.copyFileSync(from, to);
-        moved.push(path.join(rel, e.name));
-      } catch (_) { /* ignore */ }
-    }
-  };
-  walk(srcDir, '');
-  return moved;
+function readJson(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return { ok: false, missing: true, data: null, error: null };
+    return { ok: false, missing: false, data: null, error: String((e && e.message) || e) };
+  }
+  try { return { ok: true, data: JSON.parse(raw), error: null }; }
+  catch (e) { return { ok: false, missing: false, data: null, error: `JSON 解析失败：${e.message}` }; }
 }
 
-/**
- * 加载插件配置；不存在时尝试迁移一次。
- * 迁移顺序：① <插件>/service/data（Junction 版旧数据） ② D:\Reports（更早桌面版）
- * 返回 { config, migratedFrom }
- */
-function loadConfig() {
-  ensureDirs();
-  const existing = readJson(CONFIG);
-  if (existing.ok) return { config: mergeDefaults(existing.data), migratedFrom: '', error: '' };
-  if (!existing.missing) {
-    // 配置损坏：**不要用默认值覆盖**（会把输出目录、绩效表目录、邮箱授权码全重置）。
-    // 先把损坏的文件改名留档，再用默认值重建，让用户能手工捞回来。
-    const broken = `${CONFIG}.corrupt-${ts()}`;
-    try { fs.copyFileSync(CONFIG, broken); fs.renameSync(CONFIG, CONFIG + '.tmp-old'); } catch (_) { /* ignore */ }
-    const base = defaultConfig();
-    try { saveConfig(base); } catch (_) { /* ignore */ }
-    return {
-      config: base, migratedFrom: '',
-      error: `配置文件损坏（${existing.error}），已备份为 ${path.basename(broken)}，并用默认配置重建`,
-    };
+/** 深合并（只合并普通对象，数组按新值覆盖）。 */
+function merge(base, patch) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {
+      out[k] = merge(out[k], v);
+    } else if (v !== undefined) out[k] = v;
   }
-
-  // ① 插件目录内的旧数据（含 config/key/reports/logs）
-  const moved = migrateFromDir(LEGACY_PLUGIN_DATA);
-
-  const base = defaultConfig();
-  const legacyRes = readJson(LEGACY_CONFIG);
-  const legacy = legacyRes.ok ? legacyRes.data : null;
-  let migratedFrom = moved.length ? LEGACY_PLUGIN_DATA : '';
-  if (legacy) {
-    const l = legacy.notify && legacy.notify.smtp ? legacy.notify.smtp : {};
-    base.handler = legacy.handler || base.handler;
-    base.threshold = typeof legacy.threshold === 'number' ? legacy.threshold : base.threshold;
-    base.mcp_url = legacy.mcp_url || base.mcp_url;
-    // 绩效表目录保留旧值（插件里没有这张模板）
-    if (legacy.folder) base.folder = legacy.folder;
-    base.notify.enabled = !!(legacy.notify && legacy.notify.enabled);
-    base.notify.smtp.host = l.host || base.notify.smtp.host;
-    base.notify.smtp.port = l.port || base.notify.smtp.port;
-    base.notify.smtp.ssl = l.ssl !== false;
-    base.notify.smtp.starttls = !!l.starttls;
-    base.notify.smtp.user = l.user || '';
-    base.notify.smtp.password = l.password || '';
-    base.notify.smtp.to = Array.isArray(l.to) && l.to.length ? l.to : [];
-    if (legacy.confirm) base.confirm = { ...base.confirm, ...legacy.confirm };
-    // 输出目录：沿用旧位置（周报继续落在原来那个文件夹），不存在才用插件内目录
-    const legacyOut = legacy.out_dir
-      ? (path.isAbsolute(legacy.out_dir) ? legacy.out_dir : path.join(LEGACY_DIR, legacy.out_dir))
-      : path.join(LEGACY_DIR, '周报');
-    if (fs.existsSync(legacyOut)) base.out_dir = legacyOut;
-    migratedFrom = LEGACY_CONFIG;
-  }
-
-  // 迁移 Key
-  try {
-    if (!fs.existsSync(KEY) && fs.existsSync(LEGACY_KEY)) {
-      const k = fs.readFileSync(LEGACY_KEY, 'utf8').replace(/^\uFEFF/, '').trim();
-      if (k) {
-        fs.writeFileSync(KEY, k, 'utf8');
-        migratedFrom = migratedFrom || LEGACY_KEY;
-      }
-    }
-  } catch (_) { /* ignore */ }
-
-  saveConfig(base);
-  return { config: base, migratedFrom };
-}
-
-function mergeDefaults(cfg) {
-  const base = defaultConfig();
-  const out = { ...base, ...cfg };
-  out.notify = { ...base.notify, ...(cfg.notify || {}) };
-  out.notify.smtp = { ...base.notify.smtp, ...((cfg.notify && cfg.notify.smtp) || {}) };
-  out.confirm = { ...base.confirm, ...(cfg.confirm || {}) };
-  if (!Array.isArray(out.notify.smtp.to)) out.notify.smtp.to = [];
-  // Key 永远指向 DATA_DIR 里的那份（绝对路径，不受安装位置影响）
-  out.token_file = KEY;
-  if (!out.out_dir || !String(out.out_dir).trim()) out.out_dir = REPORTS;
   return out;
 }
 
-function saveConfig(cfg) {
+/** 载入配置；首次自动创建空配置；损坏文件另存备份不静默丢弃。 */
+function loadConfig() {
   ensureDirs();
-  if (fs.existsSync(CONFIG)) {
-    try { fs.copyFileSync(CONFIG, CONFIG + '.bak-' + ts()); } catch (_) { /* ignore */ }
+  const r = readJson(CONFIG);
+  if (r.ok) {
+    const cfg = merge(defaultConfig(), r.data);
+    cfg.token_file = KEY; // Key 永远落在数据目录，避免配置里指到别处
+    return { config: cfg, error: null, created: false };
   }
-  // 原子写：先写临时文件再改名（写到一半被杀会留下半截配置）
-  const tmp = CONFIG + '.tmp-' + ts();
-  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, CONFIG);
-  return cfg;
+  let error = r.error;
+  if (!r.missing) {
+    try { backup(CONFIG); } catch { /* ignore */ }
+    error = `${error}；已备份原文件并重建默认配置`;
+  }
+  const cfg = defaultConfig();
+  try { atomicWrite(CONFIG, JSON.stringify(cfg, null, 2) + '\n'); } catch { /* ignore */ }
+  return { config: cfg, error, created: true };
+}
+
+/** 保存配置：密码掩码开头的值保留旧密码。 */
+function saveConfig(patch) {
+  const current = loadConfig().config;
+  const incoming = { ...(patch || {}) };
+  if (incoming.notify && incoming.notify.smtp && typeof incoming.notify.smtp.password === 'string'
+      && incoming.notify.smtp.password.startsWith('••')) {
+    incoming.notify = { ...incoming.notify, smtp: { ...incoming.notify.smtp } };
+    delete incoming.notify.smtp.password;
+  }
+  const next = merge(current, incoming);
+  next.token_file = KEY;
+  // 归一化：空字符串保持为空（使用者未填），非空路径转绝对路径
+  for (const field of ['out_dir', 'folder', 'report_template']) {
+    if (next[field]) next[field] = path.resolve(String(next[field]));
+  }
+  atomicWrite(CONFIG, JSON.stringify(next, null, 2) + '\n');
+  return next;
+}
+
+function maskConfig(cfg) {
+  const copy = JSON.parse(JSON.stringify(cfg || {}));
+  if (copy.notify && copy.notify.smtp && copy.notify.smtp.password) {
+    copy.notify.smtp.password = '••••••••(' + String(copy.notify.smtp.password).length + ')';
+  }
+  return copy;
 }
 
 function readKey() {
-  try {
-    return fs.readFileSync(KEY, 'utf8').replace(/^\uFEFF/, '').trim();
-  } catch (_) {
-    return '';
-  }
+  try { return fs.readFileSync(KEY, 'utf8').replace(/^\uFEFF/, '').trim(); } catch { return ''; }
+}
+function writeKey(value) {
+  atomicWrite(KEY, String(value || '').trim() + '\n');
+}
+function keyInfo() {
+  const k = readKey();
+  return { present: Boolean(k), masked: k ? `${k.slice(0, 4)}••••${k.slice(-4)}` : '' };
 }
 
-function writeKey(key) {
-  ensureDirs();
-  if (fs.existsSync(KEY)) {
-    try { fs.copyFileSync(KEY, KEY + '.bak-' + ts()); } catch (_) { /* ignore */ }
+/** 列出输出目录下的周报（最多 3 层，只认 周报_*.txt）。 */
+function listReports(outDir) {
+  const root = outDir && fs.existsSync(outDir) ? outDir : REPORTS;
+  const out = [];
+  const walk = (dir, depth) => {
+    if (depth > 3) return;
+    let items = [];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(dir, it.name);
+      if (it.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!/^周报_.*\.txt$/i.test(it.name)) continue;
+      let st;
+      try { st = fs.statSync(full); } catch { continue; }
+      out.push({
+        name: it.name, path: full, dir: path.relative(root, dir) || '.',
+        size: st.size, mtime: st.mtimeMs,
+        entries: countBlocks(full),
+      });
+    }
+  };
+  walk(root, 0);
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+
+function countBlocks(file) {
+  try { return (fs.readFileSync(file, 'utf8').match(/^【.+】$/gm) || []).length; } catch { return 0; }
+}
+
+/** 读单份周报；限制在输出目录内，防目录穿越。 */
+function readReport(file, outDir) {
+  const root = path.resolve(outDir && fs.existsSync(outDir) ? outDir : REPORTS);
+  const full = path.resolve(String(file || ''));
+  if (!full.startsWith(root + path.sep) && full !== root) return { ok: false, error: '路径不在周报输出目录内' };
+  if (!/^周报_.*\.txt$/i.test(path.basename(full))) return { ok: false, error: '不是周报文件' };
+  try { return { ok: true, path: full, text: fs.readFileSync(full, 'utf8') }; }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+}
+
+/** 目录浏览：给面板的路径选择器用，只列目录、不列文件内容。 */
+function listDirs(input) {
+  const drives = [];
+  if (process.platform === 'win32') {
+    for (let i = 65; i <= 90; i += 1) {
+      const d = String.fromCharCode(i) + ':\\';
+      try { if (fs.existsSync(d)) drives.push(d); } catch { /* ignore */ }
+    }
   }
-  fs.writeFileSync(KEY, String(key || '').trim(), 'utf8');
+  let target = String(input || '').trim();
+  if (!target) target = process.platform === 'win32' ? (drives.find((d) => /^[C-Z]:/i.test(d)) || drives[0] || 'C:\\') : os.homedir();
+  target = path.resolve(target);
+  let dirs = [];
+  let writable = false;
+  try {
+    const items = fs.readdirSync(target, { withFileTypes: true });
+    dirs = items.filter((x) => x.isDirectory() && !x.name.startsWith('.'))
+      .map((x) => ({ name: x.name, path: path.join(target, x.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    writable = true;
+  } catch { /* 不可读 */ }
+  const parent = path.dirname(target) === target ? null : path.dirname(target);
+  return { ok: true, path: target, parent, dirs, drives, writable };
+}
+
+/** 识别使用者提供的模板 / 绩效表目录，供概览页展示「已识别到什么」。 */
+function probeUserPaths(cfg) {
+  const result = { template: null, perf: null, out: null };
+  const tpl = cfg.report_template || TEMPLATE_FILE;
+  try {
+    if (fs.existsSync(tpl) && fs.statSync(tpl).isFile()) {
+      const text = fs.readFileSync(tpl, 'utf8').replace(/^\uFEFF/, '');
+      result.template = { path: tpl, builtin: !cfg.report_template, placeholders: (text.match(/\{\{\w+\}\}/g) || []) };
+    }
+  } catch { /* ignore */ }
+  try {
+    if (cfg.folder && fs.existsSync(cfg.folder)) {
+      const files = fs.readdirSync(cfg.folder).filter((f) => /\.xlsx$/i.test(f) && !f.startsWith('~$'));
+      result.perf = { path: cfg.folder, tables: files.slice(0, 30), count: files.length };
+    }
+  } catch { /* ignore */ }
+  try {
+    if (cfg.out_dir) {
+      fs.mkdirSync(cfg.out_dir, { recursive: true });
+      result.out = { path: cfg.out_dir, writable: true };
+    }
+  } catch { result.out = { path: cfg.out_dir || '', writable: false }; }
+  return result;
+}
+
+function log(line) {
+  try {
+    ensureDirs();
+    fs.appendFileSync(path.join(LOGS, 'panel.log'), `[${new Date().toISOString()}] ${line}\n`, 'utf8');
+  } catch { /* ignore */ }
 }
 
 module.exports = {
-  SERVICE_DIR, PLUGIN_DIR, ENGINE_DIR, DATA_DIR, ENGINE,
-  CONFIG, KEY, REPORTS, LOGS, LEGACY_DIR, LEGACY_PLUGIN_DATA,
-  ensureDirs, defaultConfig, loadConfig, saveConfig, readKey, writeKey,
-  migrateFromDir, readJson, ts,
+  SERVICE_DIR, PLUGIN_DIR, ENGINE_DIR, ENGINE, PUBLIC_DIR, TEMPLATE_FILE,
+  DATA_DIR, CONFIG, KEY, REPORTS, LOGS,
+  ensureDirs, defaultConfig, loadConfig, saveConfig, maskConfig,
+  readKey, writeKey, keyInfo, listReports, readReport, listDirs, probeUserPaths,
+  backup, atomicWrite, log,
 };

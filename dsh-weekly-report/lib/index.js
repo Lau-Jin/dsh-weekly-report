@@ -1,37 +1,31 @@
 /**
- * 周报面板 · Host 半身
+ * 周报工作台 · DSH Host 半身（v1.0）
  *
- * 只做一件事：保证本地面板服务（默认 127.0.0.1:8798）在运行。
- * 面板本身是纯 UI，所有读写（配置 / API Key / 生成 / 历史）都由那个服务完成，
- * 这里不碰任何凭据。
+ * 只做一件事：保证本地面板服务（127.0.0.1:8798）在运行。
+ * 面板是纯 UI，配置 / API Key / 生成 / 历史全部由服务负责，这里不碰任何凭据。
  *
- * 2026-11-11（v0.7.1）连通性优化：
- *   · 探活用轻量 /api/ping（1~2 ms），不再打 /api/state（要 spawn python，慢的时候 2~6 s，
- *     会把活着服务误判成挂了，然后反复拉起 → 日志里一堆「port in use」）
- *   · 心跳 20 秒一次，单飞（上一次拉起还没结果就不重复拉起）
- *   · 拉起后 5 秒内复核一次，只记「起来 / 没起来」两种日志，不再刷屏
- *
- * 2026-11-12（v0.8.0）：这一层成为**唯一**的保活手段。
- * 原来还有个 Windows 计划任务「周报面板守护」跑 powershell 探活，但
- * `powershell.exe -WindowStyle Hidden` 会先建控制台窗口再隐藏（桌面每 2 分钟闪一下蓝窗），
- * 已连同 service/ps/watchdog*.ps1 一起删除；这里的 spawn 用 windowsHide，全程无窗口。
+ * v1.0 完整化：
+ *   · 路径全部相对包自身解析，不再出现任何本机硬编码目录，包可整体分发；
+ *   · 探活只用轻量 /api/ping，20 秒一次、单飞，拉起用 windowsHide 全程无窗口；
+ *   · 服务文件名与端口沿用旧版，DSH 侧边栏 iframe 无需改动即可显示新面板；
+ *   · 不装任何计划任务（避免桌面周期性弹控制台窗口）。
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const require = createRequire(import.meta.url)
 const PORT = process.env.WEEKLY_PANEL_PORT || '8798'
 const SERVICE = `http://127.0.0.1:${PORT}`
 const PING = SERVICE + '/api/ping'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
+const PLUGIN_DIR = path.resolve(HERE, '..')
 
 /**
- * server.cjs 可能的落点，按优先级：
- *   1. WEEKLY_PANEL_SERVER 显式指定
- *   2. 包内（Junction / link 安装时 HERE 指向真实路径，这一条就能命中）
- *   3. WEEKLY_PANEL_HOME 指定的目录
- *   4. 本机常见检出位置（仓库主数据源 D:\Tools\Lau-tool，其次旧的开发目录）
+ * server.cjs 落点：包内优先（Junction / link / 复制安装都能命中），
+ * 其余只作环境变量兜底。没有任何写死的本机绝对路径。
  */
 const SERVER_CANDIDATES = [
   process.env.WEEKLY_PANEL_SERVER,
@@ -40,7 +34,6 @@ const SERVER_CANDIDATES = [
   process.env.WEEKLY_PANEL_HOME
     ? path.join(process.env.WEEKLY_PANEL_HOME, 'service', 'server.cjs')
     : '',
-  path.resolve('D:\\', 'Lau-tool', 'dsh-weekly-report', 'service', 'server.cjs'),
 ].filter(Boolean)
 
 function findServer() {
@@ -111,8 +104,32 @@ async function ensureService() {
   }
 }
 
+/**
+ * 自举绩效表组件：完整包自带 node_modules 时是零成本的同步判断；
+ * 精简包（例如从 DSH 插件页安装）才在后台异步补装，不阻塞 DSH 启动。
+ * 这样无论用 node install.mjs 还是插件页直装，能力都一致。
+ */
+let bootstrapped = false
+function bootstrapPerfDeps() {
+  if (bootstrapped) return
+  bootstrapped = true
+  try {
+    const PerfDeps = require('../service/perf-deps.cjs')
+    if (PerfDeps.isAvailable(PLUGIN_DIR)) return
+    const timer = setTimeout(() => {
+      void PerfDeps.ensure(PLUGIN_DIR).then((r) => {
+        if (!r.available) console.warn('[weekly-report] 绩效表组件未就绪，可在面板「设置」页补装')
+      }).catch(() => {})
+    }, 1500)
+    if (typeof timer.unref === 'function') timer.unref()
+  } catch {
+    /* 尽力而为，不影响面板服务 */
+  }
+}
+
 export function apply(ctx) {
   void ensureService()
+  bootstrapPerfDeps()
   if (ctx && typeof ctx.effect === 'function') {
     try {
       ctx.effect(() => {

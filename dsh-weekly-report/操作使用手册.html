@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>周报工作台 · 操作使用手册</title>
+<style>
+:root{--bg:#f6f7f9;--surface:#fff;--line:#e7eaf0;--text:#202634;--text2:#5f6879;--text3:#98a1b0;--accent:#4c6ef5;--accent-soft:#eef2ff;--ok:#2f9e6f;--radius:14px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;--mono:Consolas,"SFMono-Regular",Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.75 var(--font);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.top{height:62px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:10}
+.top b{font-size:15px;font-weight:650}.top span{font-size:12px;color:var(--text3);margin-left:10px}
+.wrap{max-width:1180px;margin:0 auto;display:flex;align-items:flex-start}
+.side{width:236px;flex:0 0 236px;padding:26px 16px 40px 24px;position:sticky;top:62px;max-height:calc(100vh - 62px);overflow:auto}
+.search{width:100%;padding:8px 11px;border:1px solid #d9dee8;border-radius:9px;outline:none;font-size:12.5px;margin-bottom:14px}
+.search:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.side a{display:block;padding:7px 11px;border-radius:8px;color:var(--text2);font-size:13px}
+.side a:hover,.side a.on{background:var(--accent-soft);color:#3b5bdb;text-decoration:none}
+.side a.on{font-weight:600}
+.main{flex:1;min-width:0;padding:30px 32px 90px;max-width:920px}
+.hero{background:linear-gradient(120deg,#fff,#f4f7ff);border:1px solid var(--line);border-radius:18px;padding:28px 30px;margin-bottom:24px}
+.hero .eyebrow{font-size:11px;letter-spacing:.12em;color:var(--accent);font-weight:650;text-transform:uppercase}
+.hero h1{margin:8px 0 8px;font-size:26px;font-weight:680;letter-spacing:-.02em}
+.hero p{margin:0;color:var(--text2);font-size:13px;max-width:600px}
+section{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px 26px;margin-bottom:16px;box-shadow:0 1px 2px rgba(24,32,56,.04)}
+section.hide{display:none}
+h2{margin:0 0 12px;font-size:17px;font-weight:650;scroll-margin-top:80px}
+h3{margin:20px 0 8px;font-size:14px;font-weight:650}
+p{margin:8px 0;color:var(--text2);font-size:13px}
+ul,ol{padding-left:20px;color:var(--text2);font-size:13px}li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12.5px}
+th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--text3);font-weight:600;background:#fafbfd}
+code{font:12px var(--mono);background:#f1f3f8;padding:2px 6px;border-radius:5px;color:#3b5bdb}
+pre{position:relative;background:#f8f9fc;border:1px solid var(--line);border-radius:10px;padding:14px 16px;font:12.5px/1.8 var(--mono);color:var(--text2);overflow:auto;white-space:pre-wrap;margin:10px 0}
+.copy{position:absolute;right:8px;top:8px;border:1px solid var(--line);background:#fff;border-radius:7px;padding:3px 9px;font-size:11px;color:var(--text2);cursor:pointer}
+.copy:hover{color:var(--accent);border-color:var(--accent)}
+.note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 9px 9px 0;margin:12px 0;font-size:12.5px;color:#3b4a80}
+.note.warn{border-left-color:#e8933a;background:#fff5e8;color:#8a5a18}
+.note.ok{border-left-color:var(--ok);background:#e9f7f0;color:#22734f}
+.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:#3b5bdb;margin-left:6px}
+.stat{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}
+.stat div{flex:1;min-width:130px;background:#fafbfd;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.stat b{display:block;font-size:19px;font-weight:680}.stat small{color:var(--text3);font-size:11.5px}
+footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px}
+@media(max-width:900px){.wrap{flex-direction:column}.side{width:100%;flex:none;position:static;max-height:none;padding:14px 18px}.side a{display:inline-block}.main{padding:20px 18px 70px}.top{padding:0 16px}}
+</style>
+</head>
+<body>
+<div class="top"><div><b>周报工作台 · 操作使用手册</b><span>v1.0.0 · 装上即用</span></div><span>本地运行 · 数据不出本机</span></div>
+<div class="wrap">
+<aside class="side">
+  <input class="search" id="q" placeholder="搜索章节…">
+  <nav id="nav">
+    <a href="#s1">1 · 开始之前</a>
+    <a href="#s2">2 · 一键安装</a>
+    <a href="#s3">3 · 打开面板</a>
+    <a href="#s4">4 · 首次配置</a>
+    <a href="#s5">5 · 生成周报</a>
+    <a href="#s6">6 · 周报格式与模板</a>
+    <a href="#s7">7 · 绩效表规则</a>
+    <a href="#s8">8 · 历史与引用内容</a>
+    <a href="#s9">9 · 邮件通知</a>
+    <a href="#s10">10 · 常见问题</a>
+    <a href="#s11">11 · 卸载与回滚</a>
+    <a href="#s12">12 · 安全说明</a>
+  </nav>
+</aside>
+<main class="main">
+  <div class="hero">
+    <div class="eyebrow">Weekly Report Studio</div>
+    <h1>装上，就能用</h1>
+    <p>一条命令完成安装与启动，不用重启 DSH、不用手工拉服务。API Key、输出目录、绩效表与模板由你按需提供，插件负责识别并据此生成、输出。</p>
+    <div class="stat">
+      <div><b>v1.1.2</b><small>版本号取自 package.json</small></div>
+      <div><b>0 预置凭据</b><small>邮件默认关闭</small></div>
+      <div><b>4 个页面</b><small>概览 / 生成 / 设置 / 历史</small></div>
+    </div>
+    <p style="margin-top:14px;font-size:13px;color:var(--muted)">版本规则：小改动走最后一位（1.1.0 → 1.1.1），功能级变化走第二位（1.0.x → 1.1.0），不兼容大改走第一位。</p>
+  </div>
+
+  <section id="s1" data-t="开始之前 环境 Node 要求 依赖"><h2>1 · 开始之前</h2>
+    <table><tr><th>项目</th><th>要求</th></tr>
+      <tr><td>运行环境</td><td>Node ≥ 20（DSH 自带，一般无需另装）</td></tr>
+      <tr><td>核心功能依赖</td><td><b>零第三方依赖</b>。周报 txt 生成、模板、历史、面板全部用 Node 标准库</td></tr>
+      <tr><td>可选依赖</td><td><code>exceljs@4.4.0</code>，仅「写入绩效表 .xlsx」需要。<b>完整分发包已自带</b>（保留 <code>node_modules/</code>），零网络开箱可用；精简包才需自动补装</td></tr>
+      <tr><td>需要你提供</td><td>研发平台 API Key、处理人姓名、周报输出目录；绩效表目录与自定义模板按需</td></tr>
+      <tr><td>不需要</td><td>不需要联网安装依赖、不需要装 Python、不需要计划任务、不需要重启 DSH</td></tr>
+    </table>
+    <div class="note">本插件在开发时参考了 DeepSeek Harness 的历史会话，用来确定周报格式、绩效表规则与界面偏好；<b>运行期间不会读取任何会话内容</b>。数据来源只有研发平台的工单与任务。</div>
+  </section>
+
+  <section id="s2" data-t="一键安装 命令 dry-run verify uninstall 参数"><h2>2 · 一键安装</h2>
+    <p><b>推荐：双击即装，全程不用敲命令。</b></p>
+    <table><tr><th>系统</th><th>双击 / 运行</th><th>效果</th></tr>
+      <tr><td>Windows</td><td><code>一键安装.vbs</code>（首选）</td><td>隐藏窗口自动定位 Node → 安装 → 打开中文面板；成功不弹窗，失败才给诊断</td></tr>
+      <tr><td>Windows</td><td><code>一键安装.cmd</code>（备用）</td><td>VBS 被安全策略拦掉时用；控制台显示进度，装完自动开面板</td></tr>
+      <tr><td>macOS</td><td><code>一键安装.command</code></td><td>安装 → 打开面板 → 按回车关闭</td></tr>
+      <tr><td>Linux</td><td><code>bash install.sh</code></td><td>安装 → 打开面板</td></tr>
+    </table>
+    <p>也可以手动执行：</p>
+    <pre><button class="copy">复制</button>node install.mjs</pre>
+    <p>安装器自动完成：定位 Node → 注册插件到 DSH profile → 确保 <code>cordis.patch.yml</code> 的 bundle 声明 → 写入兼容转发 → 确保绩效表组件 → 启动面板服务。加 <code>--open</code> 可让命令方式也自动打开浏览器。</p>
+    <div class="note">为什么还要「双击」这一次：安装要改三处 DSH 配置（profile 里的 <code>node_modules</code> 链接、<code>package.json</code> 的 bundle 依赖、<code>cordis.patch.yml</code> 的 insert 块），必须由本机进程去写，DSH 运行时不会扫描任意目录把插件挂上来。双击只是触发器，不需要敲命令。环境依赖只有三条：Node ≥ 20（DSH 自带）、profile 目录可写、Windows/macOS/Linux 任一；不需要联网，也不需要 npm 安装。</div>
+    <table><tr><th>命令</th><th>用途</th></tr>
+      <tr><td><code>node install.mjs --dry-run</code></td><td>预览改动，不写任何文件</td></tr>
+      <tr><td><code>node install.mjs --verify</code></td><td>校验 9 项安装状态</td></tr>
+      <tr><td><code>node install.mjs --uninstall</code></td><td>一键回滚，保留使用者数据</td></tr>
+      <tr><td><code>node install.mjs --profile=web</code></td><td>装到指定 profile（默认 desktop）</td></tr>
+      <tr><td><code>node install.mjs --json</code></td><td>机器可读输出，便于脚本集成</td></tr>
+    </table>
+    <div class="note ok">重复运行是幂等的：已装好会显示「已是最新」，不会重复写配置或覆盖你的其它插件。</div>
+  </section>
+
+  <section id="s3" data-t="打开面板 侧边栏 端口 8798 免重启 浏览器"><h2>3 · 打开面板</h2>
+    <p>装完直接在 DSH 左侧边栏点「周报」。也可以浏览器打开：</p>
+    <pre><button class="copy">复制</button>http://127.0.0.1:8798/</pre>
+    <p><b>为什么不用重启 DSH：</b>新服务沿用旧版的文件名 <code>service/server.cjs</code> 和端口 <code>8798</code>，侧边栏 iframe 指向不变，服务一换，界面立刻是新的。若侧边栏没刷新，点面板里的刷新即可。</p>
+    <p>服务由插件 Host 半身每 20 秒静默探活，挂了会自动拉起（无控制台窗口）；不安装任何计划任务。</p>
+    <p>右上角「<b>打开数据目录</b>」用于打开 <code>%USERPROFILE%\.dsh\weekly-report\</code>：里面是 <code>config.json</code>（配置）、<code>api-key.txt</code>、周报输出与运行日志，方便查看、备份或排查，点击只打开目录、不修改任何内容。生成结果与历史页的「打开所在目录 / 打开目录」会在资源管理器里<b>直接选中对应周报文件</b>。</p>
+    <div class="note">面板按当前窗口 / iframe 的实际高度自动排布：顶栏与导航固定，内容区自己滚动。日志、周报全文、组件输出、格式预览都带「收起」按钮；历史周报多时，在左侧列表内上下滚动查找，搜索框始终吸顶并显示总数。所有打开类操作都会给出结果提示，失败时自动复制路径便于手动粘贴。</div>
+  </section>
+
+  <section id="s4" data-t="首次配置 API Key 处理人 输出目录 绩效表 模板 设置"><h2>4 · 首次配置</h2>
+    <p>打开「设置」页，按需要填三项，然后点底部「保存设置」：</p>
+    <ol>
+      <li><b>研发平台接入</b>：粘贴 API Key（工单数据来源）、填处理人姓名、确认 MCP 地址。可点「测试连接」看识别出多少工具。</li>
+      <li><b>输出与模板</b>：填周报输出目录；需要绩效表时填绩效表目录（放入月度考核表 .xlsx），必要时再指定一张<b>绩效表模板</b>（留空就用当月的表）。路径可以点「浏览」选择，也可直接粘贴。</li>
+      <li><b>周报模板</b>：不改就沿用你约定的格式；要改可直接编辑占位符，或点「恢复内置」。</li>
+    </ol>
+    <div class="note">概览页的「准备情况」会实时列出还缺什么；就绪度环显示完成项 / 总项数，不用猜哪里没配好。</div>
+  </section>
+
+  <section id="s5" data-t="生成周报 本周 上周 本月 自定义 日志 结果"><h2>5 · 生成周报</h2>
+    <p>「生成」页选周期，点「开始生成」；日志实时滚动，结束后直接给出文件路径与内容预览。</p>
+    <table><tr><th>周期</th><th>说明</th></tr>
+      <tr><td>本周 / 上周</td><td>按自然周（周一至周日）出一份周报</td></tr>
+      <tr><td>本月 / 上个月</td><td>按月拆成若干自然周，每周各出一份</td></tr>
+      <tr><td>自定义</td><td>指定起止日期，插件按自然周拆分</td></tr>
+    </table>
+    <p>可选项：<b>同步写入绩效表</b>（本月全部周报内容）、<b>重新拉取数据</b>（忽略本地缓存）、<b>不含任务中心</b>（只按工单生成）。</p>
+    <div class="note warn">没填 API Key 时不会报一堆堆栈，而是提示「请到设置页提供 API Key」；绩效表组件缺失时也会给出明确的补装入口。</div>
+  </section>
+
+  <section id="s6" data-t="周报格式 模板 占位符 category school time subject work note progress"><h2>6 · 周报格式与模板</h2>
+    <p>沿用你在历史会话里约定的块格式，输出与之前的样例逐字一致：</p>
+    <pre><button class="copy">复制</button>【项目运维】
+四川传媒学院
+  时间: 2026年11月9日
+  事项: 帆软报表健康巡检异常提示
+  工作内容：https://yanfa.scedu.tech/?tab=ticket-detail&amp;ticketId=195
+  重要说明：无
+  进度：100%</pre>
+    <table><tr><th>占位符</th><th>含义</th></tr>
+      <tr><td><code>{{category}}</code></td><td>类别，如「项目运维」「交付部署」</td></tr>
+      <tr><td><code>{{school}}</code></td><td>学校 / 项目名称</td></tr>
+      <tr><td><code>{{time}}</code></td><td>本周期时间范围，按当前周期填写</td></tr>
+      <tr><td><code>{{subject}}</code></td><td>事项名称</td></tr>
+      <tr><td><code>{{work}}</code></td><td>工作内容，通常是工单 / 任务链接</td></tr>
+      <tr><td><code>{{note}}</code></td><td>重要说明，缺省为「无」</td></tr>
+      <tr><td><code>{{progress}}</code></td><td>进度百分比</td></tr>
+    </table>
+    <p>自定义模板保存在数据目录，不改动插件自带文件，方便整包升级。生成习惯：每周六 12:00。</p>
+    <div class="note"><b>概览页的「周报格式」是不是写死的？</b>不是。它按「设置 → 周报模板」里<b>当前生效的模板</b>渲染，改了模板保存后预览立即跟着变。预览里的学校 / 项目、事项、时间、进度是<b>示例值</b>；实际生成时全部由本周工单与任务数据填充，只有字段名称、顺序和标签由模板决定。点「看真实数据」可切换到最近一份周报的首条记录对照。</div>
+  </section>
+
+  <section id="s7" data-t="绩效表 月度考核表 格式不变 月底复核 exceljs 补装 模板 结构识别 备份"><h2>7 · 绩效表规则</h2>
+    <ul>
+      <li>绩效表内容为<b>本月全部周报内容</b>，时间与周报一致。</li>
+      <li><b>格式保持不能改变</b>：只写明细区那六列里该变的格子，其它列（评定说明、工时等）、样式、行高、列宽、合并区、公式、其它工作表全部保持原样。</li>
+      <li><b>会认表</b>：按表头文字找列（类别 / 任务名称 / 开始时间 / 结束时间 / 是否完成 / 评定），按「工作任务考核」区块标题算可写行数；「被考评人 / 考评时间 / 填报时间」按标签找右边的格子。换一张版式略有差异的模板也能对上。</li>
+      <li><b>先核对再写</b>：设置页「绩效表模板」旁点「检测表格结构」，会把识别结果列出来（哪一列、第几行到第几行、写哪个格子），这一步不写任何文件。</li>
+      <li><b>每次写前自动备份</b>：原表复制到同目录 <code>.perf-backup\</code>（保留最近 8 份），写坏了可以直接拿回来。</li>
+      <li><b>行数不够不擅自改结构</b>：默认只提示「本月 N 条、可写 M 行」，不会插行移动考核区块；确实需要时在设置里勾「允许自动扩展行」。</li>
+      <li>每周生成周报时都同步导入绩效表；月底可在「设置」页点「月底内容复核」再核对一次。</li>
+      <li>写入 .xlsx 需要 <code>exceljs</code>：<b>完整安装包已随包自带</b>，设置页会显示「已就绪 · 随包自带」，点「重新检测组件」也只是确认状态，不会重复安装。若为了减小体积删掉了 <code>node_modules/</code>，点「检测 / 补装组件」会自动装回；输出区可收起，失败时会给出可复制的手动命令。</li>
+      <li>未装时纯周报 txt 仍可正常生成，不会报堆栈错误。</li>
+    </ul>
+    <div class="note">时间口径：<b>已完成</b>写了开始~实际完成；<b>未完成</b>写开始~<b>本周周日</b>，不会出现「11月9日-30日」这种越过本周的写法。绩效表里的日期用模板该列原有的显示格式，不强行改成别的样式。</div>
+  </section>
+
+  <section id="s8" data-t="历史 引用内容 附件 链接 预览 搜索 复制"><h2>8 · 历史与引用内容</h2>
+    <p>「历史」页左边是周报列表（可搜索文件名），右边是全文预览。工作内容里的工单 / 任务链接、重要说明等引用内容都完整保留，可直接查看与「复制全文」。</p>
+    <ul>
+      <li>列表高度按窗口自动计算，文件多时<b>在列表内上下滚动</b>查找，搜索框吸顶、上方显示「共 N 份 / 显示 M 份」。</li>
+      <li>右侧全文独立滚动；点标题栏的「收起内容」可把全文收起，只留文件名与操作按钮，再点「展开内容」恢复。</li>
+      <li>生成结果、运行日志、组件输出、概览的格式预览也都有各自的收起按钮。</li>
+      <li>列表上方的「<b>检查格式</b>」会扫描历史周报，把过去因「学校 / 项目为空」而被切成两段的记录合并回来并补全项目名（原文件自动备份）。正常文件不会被重写。</li>
+    </ul>
+    <p>概览页也展示最近 4 份周报，点一下即可跳到全文。周报按「年月 / 周报_起止日期.txt」归档。</p>
+  </section>
+
+  <section id="s9" data-t="邮件通知 SMTP 默认关闭 凭据 授权码"><h2>9 · 邮件通知</h2>
+    <p><b>默认关闭</b>，SMTP 服务器、账号、授权码全部为空，插件不预置任何凭据。需要时在「设置 → 邮件通知」打开开关并填写，保存后生效。</p>
+    <p>授权码已保存时输入框只显示占位提示，留空表示不修改，不会把掩码写回配置。</p>
+  </section>
+
+  <section id="s10" data-t="常见问题 FAQ 端口占用 识别不到 生成失败 绩效表报错"><h2>10 · 常见问题</h2>
+    <table><tr><th>现象</th><th>处理</th></tr>
+      <tr><td>侧边栏没出现「周报」/ 还是旧界面</td><td>跑 <code>node install.mjs --verify</code>；确认 <code>cordis.patch.yml</code> 里有 <code>weekly-report</code> 的 insert。刷新面板；若仍不行，完全退出 DSH 再打开一次即可（兼容转发已保证服务是新版本）。</td></tr>
+      <tr><td>面板打不开</td><td>先确认 <code>http://127.0.0.1:8798/api/ping</code> 能返回 JSON；服务由 Host 半身每 20 秒自动拉起，也可重跑一次安装。</td></tr>
+      <tr><td>生成时提示连不上研发平台</td><td>检查 MCP 地址与 API Key；设置页有「测试连接」。</td></tr>
+      <tr><td>补装绩效表组件失败</td><td>旧版会因面板服务环境里没有 npm 而报 <code>'node' 不是内部或外部命令</code>；新版组件已随包自带、按钮直接返回「已自带，无需补装」。若确实精简过包，按钮会用 Node 绝对路径自动安装，失败时输出区会给出可复制的手动命令。</td></tr>
+      <tr><td>内容展示太长 / 找不到周报文件</td><td>每块内容都有「收起」；历史列表内部滚动 + 顶部搜索 + 总数提示，页面按窗口高度自动适配。</td></tr>
+      <tr><td>周报里有一条记录没有学校 / 项目</td><td>老数据里个别任务没带校名，会把一条记录切成两段。新生成已加多级兜底；历史文件点「历史 → 检查格式」一键合并补全，或执行 <code>npm run repair</code>。</td></tr>
+      <tr><td>点「打开数据目录 / 打开目录」没反应</td><td>v1.1.0 已修：根因是启动资源管理器时带了「隐藏窗口」标志，进程起来了但窗口不可见。现在改为可见方式启动，失败会复制路径供手动粘贴。</td></tr>
+      <tr><td>周报里出现「11月9日-30日」这类越界时间</td><td>v1.1.0 起未完成事项一律写到<b>本周周日</b>，且任何一条都不越过本周。若看到旧文件，重新生成一次即可。</td></tr>
+      <tr><td>担心绩效表被改动</td><td>「设置 → 绩效表模板 → 检测表格结构」先看要写哪些格子；每次写入前原表自动备份到同目录 <code>.perf-backup\</code>，直接复制回来就能还原。默认不会插行移动考核区块。</td></tr>
+      <tr><td>端口被别的程序占用</td><td>设置环境变量 <code>WEEKLY_PANEL_PORT</code> 换端口，同步修改侧边栏的面板地址。</td></tr>
+      <tr><td>换电脑 / 分发给同事</td><td>整个插件目录拷过去，在那台机器跑一次 <code>node install.mjs</code>；数据目录各自独立，不会带走过任何凭据。</td></tr>
+    </table>
+  </section>
+
+  <section id="s11" data-t="卸载 回滚 uninstall 备份 数据保留"><h2>11 · 卸载与回滚</h2>
+    <pre><button class="copy">复制</button>node install.mjs --uninstall</pre>
+    <p>会恢复原来的 <code>node_modules</code> 链接、<code>package.json</code> 依赖与 bundle 清单、旧版 <code>service/server.cjs</code>，并移除安装器自动插入的配置块。使用者数据目录（配置、Key、历史周报、日志）<b>完整保留</b>，不删除任何文件。</p>
+    <p>安装时对 <code>package.json</code>、<code>cordis.patch.yml</code>、<code>config.json</code> 都做了时间戳备份；原插件链接与旧 server.cjs 会被挪到数据目录的 <code>backups/</code> 而不是直接删掉。</p>
+  </section>
+
+  <section id="s12" data-t="安全 只读 127.0.0.1 凭据 目录穿越 备份 数据"><h2>12 · 安全说明</h2>
+    <ul>
+      <li>面板服务只监听 <code>127.0.0.1</code>，不对外暴露。</li>
+      <li>周报读取限制在输出目录内，静态资源做了目录穿越防护。</li>
+      <li>配置与 API Key 只落在本机 <code>%USERPROFILE%\.dsh\weekly-report\</code>，写前自动备份、损坏文件另存不静默覆盖。</li>
+      <li>面板返回的配置里密码一律脱敏；Key 只显示首尾各 4 位。</li>
+      <li>源工单数据只读；插件不修改研发平台上的任何内容。</li>
+      <li><b>不要把数据目录打包分享</b>，里面可能含 API Key、路径与个人信息。</li>
+    </ul>
+  </section>
+
+  <footer>周报工作台 v1.0.0 · 单页手册，无外部依赖，可离线查看</footer>
+</main>
+</div>
+<script>
+(function(){
+  var q=document.getElementById('q');
+  var secs=Array.prototype.slice.call(document.querySelectorAll('section'));
+  var links=Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  q.addEventListener('input',function(){
+    var k=q.value.trim().toLowerCase();
+    secs.forEach(function(s){
+      var hit=!k||((s.dataset.t||'')+s.textContent).toLowerCase().indexOf(k)>=0;
+      s.classList.toggle('hide',!hit);
+    });
+    links.forEach(function(a){
+      var s=document.querySelector(a.getAttribute('href'));
+      a.style.display=(!k||!s||!s.classList.contains('hide'))?'':'none';
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.copy'),function(btn){
+    btn.addEventListener('click',function(){
+      var pre=btn.parentNode, t=pre.textContent.replace(/^复制\s*/,'').trim();
+      navigator.clipboard&&navigator.clipboard.writeText(t).then(function(){
+        var o=btn.textContent;btn.textContent='已复制';setTimeout(function(){btn.textContent=o;},1400);
+      });
+    });
+  });
+  var obs=new IntersectionObserver(function(es){
+    es.forEach(function(e){if(e.isIntersecting){
+      links.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id);});
+    }});
+  },{rootMargin:'-80px 0px -70% 0px'});
+  secs.forEach(function(s){obs.observe(s);});
+})();
+</script>
+</body>
+</html>

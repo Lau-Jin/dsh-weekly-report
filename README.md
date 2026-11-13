@@ -1,106 +1,66 @@
-# dsh-weekly-report
+# dsh-weekly-report · DSH 周报工作台
 
-> DeepSeek Harness（DSH）的**周报面板插件**：在侧边栏里配置、生成、查看周报，自带生成引擎，不依赖外部脚本。
+> DeepSeek Harness（DSH）的**完全化周报插件**：双击安装、装上即用、免重启，面板里完成配置、生成、绩效表写入与历史查看。
 >
-> 版本 **0.8.11** ｜ 许可 MIT ｜ Windows
+> 版本 **1.1.2** ｜ 许可 MIT ｜ Windows / macOS / Linux
 
 ---
 
 ## 它是什么
 
-一个装进 [DeepSeek Harness](https://github.com/deepseek-ai) 的插件：侧边栏多一个「周报」图标，点开就是一个本地面板（`127.0.0.1:8798`），可以：
+一个装进 DeepSeek Harness 的独立插件包，双击 `一键安装.vbs` 后侧边栏多一个「周报」入口，打开就是本地面板（`127.0.0.1:8798`）：
 
-- 配置 **MCP 地址 / API Key / 处理人 / 相似度阈值 / 输出目录 / 绩效表目录 / 邮件 SMTP**
-- 一键**生成周报**（实时日志、可终止）、查看**历史周报**
-- **绩效表按月累积**：当月考核表 = 本月全部周报内容（同一事项一行，时间自动并集），格式不动；每周生成自动并表，月底自动核对
-- **目录可点选**（盘符、面包屑、新建目录）
-- API Key 一键测试连通性；邮件「试运行（不发信）」
-- 可选：一键登记 Windows 计划任务，每周自动生成
-- **保持在线**：轻量 `/api/ping` 探活 + 内存缓存的状态接口 + 宿主 20 秒心跳 + Windows 计划任务守护（每 2 分钟探活，挂了自动拉起）
+- **四页面板**：概览（就绪情况 + 格式预览）/ 生成（周期选择 + 实时日志 + 结果展开收起）/ 设置（API Key、路径、模板、邮件）/ 历史（搜索、全文查看、格式修复）
+- **一键生成周报**：按工单 / 任务中心 / 工时数据自动整理，条目格式 `【类别】/ 学校 / 时间 / 事项 / 工作内容 / 重要说明 / 进度`
+- **绩效表同步写入**：本月全部周报内容写入月度考核表，逐格 diff、结构指纹校验、写前自动备份，不改表格样式与结构；可先「检测表格结构」核对待写位置
+- **时间口径**：已完成 = 开始 ~ 实际完成；未完成 = 开始 ~ 所在周周日，绝不越界
+- **邮件默认关闭**，插件不预置任何凭据；API Key、路径、模板全部由使用者自己提供
+- **保持在线**：宿主 20 秒心跳静默拉起，装完不用重启 DSH，也不装计划任务
 
-生成逻辑（`.py` 引擎）随插件分发，**不需要额外安装 Python 包**——用 DSH 自带运行时即可。
+引擎（`service/engine/`，纯 Node）随包分发，**不需要额外安装任何东西**；绩效表组件（exceljs）随包自带，缺了也会自动补装。
+
+## 安装（装完即用）
+
+```powershell
+git clone https://github.com/Lau-Jin/dsh-weekly-report.git
+cd dsh-weekly-report\dsh-weekly-report
+# 方式一：双击 一键安装.vbs（推荐）
+# 方式二：node install.mjs
+# 方式三：DSH 插件页添加仓库地址 https://github.com/Lau-Jin/dsh-weekly-report.git
+```
+
+安装器自动注册 profile 链接、bundle 依赖与 cordis 插入，并拉起面板服务；旧宿主心跳路径自动兼容，**无需重启 DSH**。
+
+## 使用者只需三件事
+
+1. **设置 → 研发平台接入**：粘贴你的 API Key、填处理人姓名，可点「测试连接」验证；
+2. **设置 → 输出与模板**：填周报输出目录；需要绩效表时填绩效表目录（放入月度考核表 .xlsx），可点「检测表格结构」核对待写位置；
+3. **生成**：选本周 / 上周 / 本月 / 自定义区间，点「开始生成」。
+
+详细说明见 [`dsh-weekly-report/README.md`](dsh-weekly-report/README.md) 与 [`dsh-weekly-report/操作使用手册.html`](dsh-weekly-report/操作使用手册.html)（单文件手册，双击即可打开）。
 
 ## 工作原理
 
 ```
 DSH 侧边栏「周报」
-   └─ iframe → http://127.0.0.1:8798/           本地面板服务（Node 标准库，无依赖）
-                  ├─ service/engine/gen_weekly_text.py   生成引擎（唯一真源）
-                  └─ %USERPROFILE%\.dsh\weekly-report\   配置 / Key / 日志 / 默认输出
+   └─ iframe → http://127.0.0.1:8798/        ← service/server.cjs（Node 标准库，零运行时依赖）
+                 ├─ service/public/          面板 UI（原生 HTML/CSS/JS）
+                 ├─ service/engine/          gen-weekly.mjs + lib/*.mjs（采集 / 渲染 / 绩效表）
+                 └─ %USERPROFILE%\.dsh\weekly-report\
+                       config.json / api-key.txt / reports/ / logs/
 ```
 
-插件 Host 半身（`lib/index.js`）负责拉起本地服务并每 60 秒探活；浏览器半身（`lib/client.js`）往侧边栏和主面板注入页面。
+- 所有配置、API Key、历史周报都保存在用户数据目录，**不随仓库分发**；
+- 面板只监听 `127.0.0.1`，浏览器半身不持有任何凭据；
+- `node install.mjs --verify` 可随时自检（9 项全绿即健康）。
 
-## 前置要求
-
-| 项 | 说明 |
-|---|---|
-| 系统 | Windows 10/11 |
-| DSH | 已安装并能打开 |
-| MCP 服务 | 一个实现以下工具的 MCP HTTP 端点（在面板里配置地址）：工单查询/详情、任务列表/详情、工时记录、工作日历 |
-| API Key | 该 MCP 服务的访问令牌（每个人的自己的） |
-
-> 引擎默认调用的工具名（可在 `service/engine/gen_weekly_text.py` 顶部常量里按需修改）：
-> `ticket_list` / `ticket_get_detail` / `task_list_my_tasks` / `task_get_task_detail` /
-> `worklog_list_mine` / `calendar_workdays`。
-
-## 安装
-
-### 方式 A · 本地检出 + Junction（推荐：改代码即时生效）
+## 自检与卸载
 
 ```powershell
-git clone git@github.com:Lau-Jin/dsh-weekly-report.git D:\Tools\Lau-tool
-powershell -ExecutionPolicy Bypass -File D:\Tools\Lau-tool\dsh-weekly-report\install.ps1
-# 完全退出 DSH 再打开
+node install.mjs --verify     # 9 项自检
+node install.mjs --uninstall  # 完整回滚（链接/依赖/patch/转发全部还原，数据保留）
 ```
-
-| 参数 | 作用 |
-|---|---|
-| `-Status` | 查看安装状态（Junction / 依赖 / bundle / patch / 服务进程 / 数据目录） |
-| `-Uninstall` | 卸载（保留数据） |
-| `-Profile <名字>` | 装到指定 profile（默认 `desktop`） |
-| `-ProfileRoot <路径>` | 直接指定 profile 目录 |
-| `-Copy` | 不用 Junction，复制一份（改代码不即时生效） |
-
-### 方式 B · DSH 插件页填仓库地址
-
-DSH → 设置 → 插件 → **添加插件** → 填仓库地址：
-
-```
-git@github.com:Lau-Jin/dsh-weekly-report.git
-```
-
-或用 `https://github.com/Lau-Jin/dsh-weekly-report.git`。仓库根有「入口包」`package.json`，
-入口指向子目录 `dsh-weekly-report/`。
-
-### 两种方式的数据位置**相同**
-
-```
-%USERPROFILE%\.dsh\weekly-report\   ← 配置 / API Key / 日志 / 默认输出（不在仓库里）
-```
-
-所以随时切换安装方式，配置和历史都在。可用环境变量 `WEEKLY_PANEL_DATA` 覆盖。
-
-## 打包给同事
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\pack-plugin.ps1
-# 产物：dist\dsh-weekly-report-<版本>.zip（约 300 KB，自动排除配置/Key/日志）
-```
-
-## 使用
-
-详见 [docs/使用说明.md](dsh-weekly-report/docs/使用说明.md)：安装、首次配置、界面、生成规则、
-邮件、定时任务、数据位置、更新、FAQ。
-
-## 周报长什么样
-
-每条 6 行：类别 / 单位 / 时间 / 事项 / 工作内容（链接）/ 重要说明 / 进度。
-
-- 纳入条件：本周期有我的工时（与处理人无关）｜本周期新建且我负责｜跨周收尾
-- 子任务独立成条；子任务未全部完成时父任务不算完成
-- 未完成的条目时间拉到本周周日
 
 ## 许可
 
-[MIT](LICENSE)
+见 [LICENSE](LICENSE)。

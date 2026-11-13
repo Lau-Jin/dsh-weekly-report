@@ -1,7 +1,6 @@
-# dsh-weekly-report bundle patch.
-#
-# 这一行 insert 挂载 Host 半身；浏览器半身由 package.json 的 dsh.client 声明，
-# 并绑定在 name 为裸包名的这一行上（子路径行不会携带半身）。
+# dsh-weekly-report v1.0 bundle patch
+# 这一行 insert 挂载 Host 半身；浏览器半身由 package.json 的 dsh.client 声明。
+# install.mjs 会幂等地确保它存在，不会覆盖使用者的其它配置。
 - insert:
     - id: weekly-report
       name: 'dsh-weekly-report'

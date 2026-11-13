@@ -75,3 +75,6 @@ node_modules/
 
 dist/
 
+
+# 周报引擎的接口缓存（工单/任务列表，TTL 内复用），禁止入库
+dsh-weekly-report/service/engine/.cache/
