@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "displayName": {
     "zh": "周报工作台",
     "en": "Weekly Report Studio"
@@ -43,7 +43,7 @@
     "verified": {
       "installChecks": "9/9",
       "smoke": "68/68",
-      "hostRevive": "12s 内拉起 v1.1.3",
+      "hostRevive": "12s 内拉起 v1.2.0",
       "installDeps": "ok / mode=bundled",
       "reportRepair": "1 处补全，其余 5 份历史文件未重写",
       "perfWrite": "就地写入 2 个单元格，结构指纹前后一致"
@@ -53,7 +53,7 @@
       "repairTool": "service/engine/repair-report.mjs（npm run repair / 历史页「检查格式」）",
       "openDir": "WINDIR 绝对路径 explorer.exe，/select 选中文件，错误不再被吞，前端 toast 反馈"
     },
-    "version": "1.1.3",
+    "version": "1.2.0",
     "versionRule": {
       "minor": "最后一位",
       "feature": "第二位",
@@ -106,8 +106,15 @@
       "progress"
     ],
     "scheduleHint": "每周六 12:00",
+    "scheduledRun": {
+      "enabled": "默认关闭，设置页开启",
+      "default": "周六 12:00 + 同步绩效表",
+      "engine": "服务内置调度器（setInterval 20s tick + 分钟槽持久化去重），无需外部计划任务",
+      "ui": "设置页「定时生成」卡片配置；面板左下角实时展示定时安排与下次运行时间"
+    },
     "timeRule": "已完成=开始~完成；未完成=开始~本周周日；任何一条结束时间不越过本周周日"
   },
+    "schedule": "每周(周几 + 时:分)自动生成本周周报，默认周六 12:00、默认关闭；由服务内置调度器触发（每 20s 检查、分钟槽持久化去重），不依赖系统计划任务；到点触发复用手动生成的全部校验与日志",
   "performanceRules": {
     "content": "本月全部周报内容填入绩效表，时间一致",
     "keepFormat": true,

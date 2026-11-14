@@ -94,6 +94,8 @@ button { cursor: pointer; }
 .ws-nav__ico { width: 18px; text-align: center; font-size: 15px; opacity: .85; }
 .ws-nav__foot { margin-top: auto; padding: 16px 14px 0; border-top: 1px solid var(--line); flex: 0 0 auto; }
 .ws-nav__hint { font-size: 11px; line-height: 1.8; color: var(--text-3); }
+.ws-nav__hint.is-on { color: var(--accent-strong); font-weight: 600; }
+.ws-switch.is-disabled { opacity: .55; pointer-events: none; }
 
 .ws-main { flex: 1; min-width: 0; min-height: 0; max-width: 1040px; padding: 26px 32px 32px; overflow-y: auto; }
 .ws-view { display: none; animation: ws-in .25s ease both; }
@@ -205,13 +207,16 @@ button { cursor: pointer; }
 .ws-field--2 > div { flex: 1 1 200px; min-width: 0; }
 .ws-field__note { font-size: 11.5px; color: var(--text-3); margin-top: 7px; line-height: 1.6; }
 .ws-optional { font-weight: 400; color: var(--text-3); font-size: 11px; margin-left: 4px; }
-input[type=text], input[type=password], input[type=date], input[type=month], input[type=number], input:not([type]), textarea {
+input[type=text], input[type=password], input[type=date], input[type=month], input[type=number], input[type=time], input:not([type]), textarea, select {
   width: 100%; padding: 9px 12px;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--line-strong); border-radius: 9px;
   outline: none; transition: border-color .15s, box-shadow .15s;
+  font-size: 13px;
 }
-input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select { cursor: pointer; appearance: auto; }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; background: var(--surface-soft); }
 input::placeholder, textarea::placeholder { color: #b3bac7; }
 .ws-textarea { font: 12.5px/1.8 var(--mono); resize: vertical; min-height: clamp(110px, 22dvh, 180px); }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }

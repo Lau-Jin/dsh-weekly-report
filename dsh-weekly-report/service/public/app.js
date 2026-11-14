@@ -68,6 +68,14 @@
   document.addEventListener('change', (e) => {
     const input = e.target;
     if (input && input.matches && input.matches('.ws-switch input[type="checkbox"]')) syncSwitchStates();
+    // 定时开关切换后立即让「生成日 / 时间 / 同步绩效表」跟着可用或禁用，不用等保存
+    if (input && input.id === 'f-schedule-enabled') {
+      const on = input.checked;
+      $('#schedule-box').querySelectorAll('select, input').forEach((el) => { el.disabled = !on; });
+      $('#f-schedule-perf').disabled = !on;
+      $('#schedule-perf-row').classList.toggle('is-disabled', !on);
+      $('#schedule-next-hint').textContent = on ? '保存后生效' : '未开启';
+    }
   });
   syncSwitchStates();
 
@@ -157,6 +165,12 @@
     $('#f-perf-template').value = c.perf_template || '';
     $('#f-perf-insert').checked = Boolean(c.perf_allow_insert);
     $('#f-threshold').value = c.threshold ?? 0.85;
+    const sc = c.schedule || {};
+    $('#f-schedule-enabled').checked = Boolean(sc.enabled);
+    $('#f-schedule-day').value = String(sc.weekday ?? 6);
+    $('#f-schedule-time').value = `${String(sc.hour ?? 12).padStart(2, '0')}:${String(sc.minute ?? 0).padStart(2, '0')}`;
+    $('#f-schedule-perf').checked = sc.perfAuto !== false;
+    renderSchedule(st);
     $('#f-notify').checked = Boolean(c.notify && c.notify.enabled);
     $('#smtp-box').hidden = !$('#f-notify').checked;
     $('#notify-badge').textContent = $('#f-notify').checked ? '已开启' : '默认关闭';
@@ -186,6 +200,42 @@
     $('#run-tip').textContent = st.key && st.key.present ? '可以开始生成' : '先在「设置」里填写 API Key';
     $('#btn-quick-run').disabled = !(st.key && st.key.present);
     $('#btn-run').disabled = !(st.key && st.key.present);
+  }
+
+  // ---------------------------------------------------------------- 定时生成
+  const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+  function fmtDateTime(iso) {
+    try {
+      const d = new Date(iso);
+      return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    } catch { return ''; }
+  }
+
+  /** 左下角与设置卡片：展示跟随定时配置（开启显示安排与下次运行，关闭显示未开启）。 */
+  function renderSchedule(st) {
+    const sc = (st.config && st.config.schedule) || {};
+    const sch = st.schedule || {};
+    const on = Boolean(sc.enabled);
+    const day = WEEKDAYS[Number(sc.weekday ?? 6)] || '周六';
+    const hm = `${String(sc.hour ?? 12).padStart(2, '0')}:${String(sc.minute ?? 0).padStart(2, '0')}`;
+    // 左下角脚注
+    const nav = $('#nav-schedule-hint');
+    if (on) {
+      const next = sch.nextRunAt ? fmtDateTime(sch.nextRunAt) : '待计算';
+      nav.innerHTML = `定时：每周${day} ${hm}<br>下次 ${esc(next)}`;
+      nav.classList.add('is-on');
+    } else {
+      nav.textContent = '定时生成未开启';
+      nav.classList.remove('is-on');
+    }
+    // 设置卡片：下次运行 + 控件可用性
+    $('#schedule-next-hint').textContent = on
+      ? (sch.nextRunAt ? `下次：${fmtDateTime(sch.nextRunAt)}` : '已开启（时间待确认）')
+      : '未开启';
+    $('#schedule-box').querySelectorAll('select, input').forEach((el) => { el.disabled = !on; });
+    $('#f-schedule-perf').disabled = !on;
+    $('#schedule-perf-row').classList.toggle('is-disabled', !on);
   }
 
   // ---------------------------------------------------------------- 模板
@@ -226,6 +276,13 @@
       perf_template: $('#f-perf-template').value.trim(),
       perf_allow_insert: $('#f-perf-insert').checked,
       threshold: Number($('#f-threshold').value) || 0.85,
+      schedule: {
+        enabled: $('#f-schedule-enabled').checked,
+        weekday: Number($('#f-schedule-day').value),
+        hour: Number(($('#f-schedule-time').value || '12:00').split(':')[0]),
+        minute: Number(($('#f-schedule-time').value || '12:00').split(':')[1]),
+        perfAuto: $('#f-schedule-perf').checked,
+      },
       notify: {
         enabled: $('#f-notify').checked,
         smtp: {

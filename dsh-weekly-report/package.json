@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "周报工作台 · 装上即用的 DSH 完整插件：一键安装、自动常驻、面板零手工启动，按使用者提供的 API Key 与路径模板生成周报与绩效表。",
@@ -15,6 +15,9 @@
   "files": [
     "lib",
     "service",
+    "!service/engine/.cache",
+    "!service/engine/.cache/**",
+    "!service/**/.cache/**",
     "locale",
     "icon.svg",
     "cordis.patch.yml",

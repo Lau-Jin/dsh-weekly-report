@@ -42,6 +42,79 @@ let run = {
   artifacts: { reports: [], perf: [], weeks: [] },
 };
 
+// ---------------------------------------------------------------- 定时生成
+/**
+ * 内置调度器：不依赖系统计划任务 / 外部 cron，面板服务常驻即生效。
+ *   - 每 20 秒 tick 一次，命中「周几 + 时 + 分」且未触发过该分钟槽才触发；
+ *   - 触发动作完全复用 startRun（API Key / 绩效表目录 / 组件等校验、运行日志全部一致）；
+ *   - 已触发的分钟槽持久化到数据目录，服务被心跳拉起重启后不会在同一分钟内重复生成。
+ */
+const SCHEDULE_TICK_MS = 20000;
+const SCHEDULE_STATE_FILE = () => path.join(P.DATA_DIR, 'schedule-state.json');
+let sched = { lastSlot: '', lastRunAt: null, lastResult: null, timer: null };
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+/** 计算下一次运行时刻；未开启或配置非法返回 null。 */
+function computeNextRun(sc, now) {
+  if (!sc || !sc.enabled) return null;
+  const wd = Number(sc.weekday); const hh = Number(sc.hour); const mm = Number(sc.minute);
+  if (!Number.isInteger(wd) || wd < 0 || wd > 6) return null;
+  if (!Number.isInteger(hh) || hh < 0 || hh > 23) return null;
+  if (!Number.isInteger(mm) || mm < 0 || mm > 59) return null;
+  const base = now || new Date();
+  for (let i = 0; i < 8; i += 1) {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i, hh, mm, 0, 0);
+    if (d.getDay() === wd && d.getTime() > base.getTime()) return d;
+  }
+  return null;
+}
+
+function readSchedState() {
+  try { return JSON.parse(fs.readFileSync(SCHEDULE_STATE_FILE(), 'utf8')) || {}; } catch { return {}; }
+}
+
+function writeSchedState(patch) {
+  try { P.atomicWrite(SCHEDULE_STATE_FILE(), JSON.stringify({ ...readSchedState(), ...patch }, null, 2) + '\n'); } catch { /* ignore */ }
+}
+
+/** 到点触发：复用 startRun 的全部校验与日志，并在运行日志里标注来源。 */
+function scheduledFire(now) {
+  const slot = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+  if (sched.lastSlot === slot || readSchedState().lastSlot === slot) return; // 本分钟已触发过
+  sched.lastSlot = slot;
+  writeSchedState({ lastSlot: slot });
+  const sc = P.loadConfig().config.schedule || {};
+  P.log(`schedule: fire ${slot} weekday=${sc.weekday} perfAuto=${sc.perfAuto ? 1 : 0}`);
+  const r = startRun({ period: 'current', perfAuto: Boolean(sc.perfAuto), scheduled: true });
+  sched.lastRunAt = new Date().toISOString();
+  sched.lastResult = r.ok ? 'started' : String(r.error || 'failed');
+  if (!r.ok) P.log(`schedule: trigger rejected: ${r.error || '未知原因'}`);
+  else pushLine(`[scheduled] 定时任务已触发（${slot}）`);
+}
+
+function scheduleTick() {
+  try {
+    const sc = P.loadConfig().config.schedule;
+    if (!sc || !sc.enabled) return;
+    const now = new Date();
+    if (now.getDay() !== Number(sc.weekday)) return;
+    if (now.getHours() !== Number(sc.hour) || now.getMinutes() !== Number(sc.minute)) return;
+    if (run.running) return; // 有手动任务在跑就不抢，下个周期再触发
+    scheduledFire(now);
+  } catch (e) { P.log(`schedule tick error: ${(e && e.message) || e}`); }
+}
+
+function startScheduler() {
+  if (sched.timer) clearInterval(sched.timer);
+  const st = readSchedState();
+  sched.lastSlot = String(st.lastSlot || '');
+  if (typeof st.lastRunAt === 'string') sched.lastRunAt = st.lastRunAt;
+  if (typeof st.lastResult === 'string') sched.lastResult = st.lastResult;
+  sched.timer = setInterval(scheduleTick, SCHEDULE_TICK_MS);
+  if (sched.timer && typeof sched.timer.unref === 'function') sched.timer.unref();
+}
+
 function json(res, code, body) {
   const text = JSON.stringify(body);
   res.writeHead(code, {
@@ -221,6 +294,12 @@ function collectState() {
     },
     config: P.maskConfig(cfg), configError: loaded.error,
     key: P.keyInfo(), excelAvailable: excelAvailable(),
+    schedule: {
+      config: cfg.schedule || null,
+      nextRunAt: (() => { const d = computeNextRun(cfg.schedule, new Date()); return d ? d.toISOString() : null; })(),
+      lastRunAt: sched.lastRunAt, lastResult: sched.lastResult,
+      running: run.running,
+    },
     checks: extra.checks, probe: extra.probe,
     reports: reports.slice(0, 12), reportCount: reports.length,
     run: publicRun(), serverTime: new Date().toISOString(),
@@ -587,6 +666,7 @@ server.on('error', (e) => {
 server.listen(PORT, HOST, () => {
   P.ensureDirs();
   P.loadConfig();
+  startScheduler();
   P.log(`weekly studio v${VERSION} on http://${HOST}:${PORT} · data=${P.DATA_DIR} · node=${process.version}`);
   console.log(`weekly studio v${VERSION} on http://${HOST}:${PORT} · data=${P.DATA_DIR}`);
 });

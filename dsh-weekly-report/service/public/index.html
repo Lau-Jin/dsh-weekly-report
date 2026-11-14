@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报工作台</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=1.1.3">
+  <link rel="stylesheet" href="/style.css?v=1.2.0">
 </head>
 <body>
   <div class="ws-app">
@@ -33,7 +33,7 @@
         <button class="ws-nav__item" data-view="settings" type="button"><span class="ws-nav__ico">⚙</span>设置</button>
         <button class="ws-nav__item" data-view="history" type="button"><span class="ws-nav__ico">≡</span>历史</button>
         <div class="ws-nav__foot">
-          <div class="ws-nav__hint">每周六 12:00 生成<br>周报与绩效表同步</div>
+          <div class="ws-nav__hint" id="nav-schedule-hint">定时生成未开启<br>可到「设置」里配置</div>
         </div>
       </nav>
 
@@ -212,6 +212,26 @@
           </div>
 
           <div class="ws-card">
+            <div class="ws-card__head"><h2>定时生成</h2><span class="ws-card__hint" id="schedule-next-hint">未开启</span></div>
+            <label class="ws-switch"><input type="checkbox" id="f-schedule-enabled"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>定时自动生成</b><small>插件内置定时器到点自动生成本周周报，不依赖系统计划任务；面板后台常驻即生效</small></span><em class="ws-switch__state"></em></label>
+            <div class="ws-field ws-field--2" id="schedule-box">
+              <div><label for="f-schedule-day">生成日（每周）</label>
+                <select id="f-schedule-day">
+                  <option value="0">周日</option>
+                  <option value="1">周一</option>
+                  <option value="2">周二</option>
+                  <option value="3">周三</option>
+                  <option value="4">周四</option>
+                  <option value="5">周五</option>
+                  <option value="6" selected>周六</option>
+                </select></div>
+              <div><label for="f-schedule-time">生成时间</label><input type="time" id="f-schedule-time" value="12:00"></div>
+            </div>
+            <label class="ws-switch" id="schedule-perf-row"><input type="checkbox" id="f-schedule-perf"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>定时生成时同步绩效表</b><small>与手动生成一致：本月全部周报内容逐格写入，表格格式保持不变（需提供绩效表目录）</small></span><em class="ws-switch__state"></em></label>
+            <p class="ws-card__desc">开启后，左下角会显示定时安排与下次运行时间；到点自动生成，结果可在「生成」页日志与「历史」页查看。服务重启后同一分钟不会重复生成。</p>
+          </div>
+
+          <div class="ws-card">
             <div class="ws-card__head"><h2>邮件通知</h2><span class="ws-badge" id="notify-badge">默认关闭</span></div>
             <label class="ws-switch"><input type="checkbox" id="f-notify"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>生成后发送邮件</b><small>默认关闭；需要时再填写 SMTP，插件不预置任何凭据</small></span><em class="ws-switch__state"></em></label>
             <div class="ws-smtp" id="smtp-box" hidden>
@@ -310,6 +330,6 @@
   </div>
 
   <div class="ws-toast" id="toast" hidden></div>
-  <script src="/app.js?v=1.1.3"></script>
+  <script src="/app.js?v=1.2.0"></script>
 </body>
 </html>

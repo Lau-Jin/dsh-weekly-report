@@ -230,6 +230,19 @@ try {
   ok('结构识别结果有可读表格样式', /\.ws-kv/.test(cssText), '');
   ok('版本号取自 package.json', /readFileSync\(path\.join\(__dirname, '\.\.', 'package\.json'\)/.test(fs.readFileSync(path.join(HERE, 'service', 'server.cjs'), 'utf8')), '');
 
+  // 定时生成模块：配置默认值、服务端调度器、UI 三层都要在
+  const pathsText = fs.readFileSync(path.join(HERE, 'service', 'paths.cjs'), 'utf8');
+  const srvText = fs.readFileSync(path.join(HERE, 'service', 'server.cjs'), 'utf8');
+  ok('定时生成有内置默认配置', /schedule:\s*\{[\s\S]*?enabled:\s*false[\s\S]*?weekday:\s*6[\s\S]*?hour:\s*12/.test(pathsText), '默认周六 12:00，关闭');
+  ok('服务端内置调度器', /function scheduleTick/.test(srvText) && /setInterval\(scheduleTick/.test(srvText) && /startScheduler\(\)/.test(srvText), '不依赖外部计划任务');
+  ok('定时触发的分钟槽会持久化去重', /SCHEDULE_STATE_FILE/.test(srvText) && /writeSchedState/.test(srvText), '');
+  ok('定时触发复用 startRun 校验', /startRun\(\{\s*period:\s*'current',\s*perfAuto:\s*Boolean\(sc\.perfAuto\),\s*scheduled:\s*true\s*\}\)/.test(srvText), '');
+  ok('state 接口返回下次运行时间', /nextRunAt/.test(srvText) && /computeNextRun/.test(srvText), '');
+  ok('设置页有定时生成卡片', ['f-schedule-enabled', 'f-schedule-day', 'f-schedule-time', 'f-schedule-perf', 'schedule-next-hint'].every((id) => htmlText.includes(`id="${id}"`)), '');
+  ok('左下角展示跟随定时配置', htmlText.includes('id="nav-schedule-hint"') && /renderSchedule/.test(jsText) && /定时：每周/.test(jsText), '');
+  ok('保存设置会写入 schedule 配置', /schedule:\s*\{[\s\S]*?weekday:\s*Number\(\$\('#f-schedule-day'\)\.value\)/.test(jsText), '');
+  ok('定时开关切换即时联动控件', /f-schedule-enabled'/.test(jsText) && /is-disabled/.test(cssText), '');
+
   const plugin = JSON.parse(fs.readFileSync(path.join(HERE, 'plugin.json'), 'utf8'));
   ok('plugin.json 声明装上即用', plugin.automatic.autoRegisterBundle === true && plugin.automatic.autoStartService === true, '');
   ok('声明会话数据仅作参考', plugin.dataSource.sessionData === 'design-reference-only', '');

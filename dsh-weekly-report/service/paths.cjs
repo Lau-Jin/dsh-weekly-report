@@ -88,6 +88,13 @@ function defaultConfig() {
     handler: '',
     threshold: 0.85,
     mcp_url: 'https://yanfa.scedu.tech/api/mcp',
+    schedule: {
+      enabled: false,  // 定时生成默认关闭，由使用者在「设置」页开启
+      weekday: 6,      // 0=周日 … 6=周六（Date#getDay 口径），默认每周六
+      hour: 12,
+      minute: 0,
+      perfAuto: true,  // 定时生成时同步写入绩效表（提供目录才写）
+    },
     confirm: { send_mail: false, imap_host: '', imap_port: 993, lookback_days: 14, subject_keyword: '周报' },
     notify: {
       enabled: false,
