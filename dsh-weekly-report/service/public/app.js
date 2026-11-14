@@ -11,7 +11,7 @@
 
   const S = {
     state: null, view: 'overview', period: 'current', reports: [],
-    selected: '', fsTarget: '', fsPath: '', runTimer: 0, tplText: '',
+    selected: '', fsTarget: '', fsPath: '', runTimer: 0, tplText: '', reportText: '',
   };
 
   async function api(url, options) {
@@ -43,9 +43,55 @@
       if (r.ok) toast(`已打开${label}：${r.path}`);
       else {
         toast(`打开失败：${r.error || '未知原因'}`, 'err');
-        try { await navigator.clipboard.writeText(p); toast('路径已复制，可粘贴到资源管理器'); } catch { /* ignore */ }
+        if (await copyText(p)) toast('路径已复制，可粘贴到资源管理器');
       }
     } catch (e) { toast('请求失败：' + (e.message || e), 'err'); }
+  }
+
+  // ---------------------------------------------------------------- 剪贴板
+  /**
+   * 纯文本复制（兼容 DSH 的旧 WebView 内核）。
+   * 老内核常因权限策略禁用或拒绝 navigator.clipboard，必须降级到 execCommand('copy')；
+   * 只写 text/plain、绝不写 text/html —— 粘贴后不会带上字体、底色、行号等富文本。
+   * @returns {Promise<boolean>} 是否成功写入剪贴板
+   */
+  async function copyText(text) {
+    const value = String(text == null ? '' : text);
+    if (!value) return false;
+    // ① 现代 Clipboard API（127.0.0.1 属安全上下文，但仍可能被 WebView 权限拦下）
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch { /* 权限被拒 / API 存在但不可用，继续降级 */ }
+    // ② 旧内核兜底：临时 textarea + execCommand('copy')
+    let ta = null;
+    try {
+      ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;z-index:9999;';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, value.length);
+      return Boolean(document.execCommand('copy'));
+    } catch { return false; }
+    finally { if (ta && ta.parentNode) ta.parentNode.removeChild(ta); }
+  }
+
+  /** 精确选中某个元素的全部内容，用于 Ctrl+A 拦截与复制失败兜底。 */
+  function selectAllIn(el) {
+    if (!el) return;
+    try {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch { /* 老内核不支持 Range 时忽略，用户仍可手动拖选 */ }
   }
 
   function fmtTime(ms) {
@@ -357,8 +403,9 @@
   }
   bindCollapse($('#btn-deps-collapse'), $('#deps-log'), ['展开输出', '收起输出']);
   $('#btn-copy-command').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('#deps-command').textContent); toast('已复制命令'); }
-    catch { toast('复制失败，请手动选中', 'err'); }
+    const el = $('#deps-command');
+    if (await copyText(el.textContent)) toast('已复制命令（纯文本）');
+    else { selectAllIn(el); toast('已选中命令，请按 Ctrl+C 复制', 'warn'); }
   });
 
   $('#btn-install-deps').addEventListener('click', async () => {
@@ -582,7 +629,9 @@
     $('#report-empty').hidden = true;
     $('#report-detail').hidden = false;
     $('#report-meta').textContent = r.path;
-    $('#report-text').textContent = r.text;
+    // 保存服务端原文：复制一律用它，不受 DOM 渲染 / 视觉折行 / 页面其它元素影响
+    S.reportText = r.text || '';
+    $('#report-text').textContent = S.reportText;
     $('#report-text').scrollTop = 0;
     setReportExpanded(true);
     renderReports();
@@ -604,8 +653,47 @@
   });
   $('#btn-open-report-dir').addEventListener('click', () => void openPath(S.selected, '周报文件'));
   $('#btn-copy-report').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('#report-text').textContent); toast('已复制全文'); }
-    catch { toast('复制失败，请手动选中', 'err'); }
+    const text = S.reportText || $('#report-text').textContent || '';
+    if (!text) { toast('请先选择一份周报', 'warn'); return; }
+    if (await copyText(text)) toast('已复制全文（纯文本，无格式）');
+    else {
+      // 两级降级都失败：至少帮用户精确选中正文，避免手动全选连界面一起复制
+      selectAllIn($('#report-text'));
+      toast('已选中全文，请按 Ctrl+C 复制', 'warn');
+    }
+  });
+
+  /**
+   * 手动复制：强制只写 text/plain。
+   * 浏览器默认会把选区同时写成 text/html（带 pre 的字体、底色、缩进），
+   * 全选整页时还会把列表项、按钮文字一起带进去，粘贴后就像多了格式和「行号」。
+   * 这里覆盖剪贴板数据，尊重部分选区，只输出纯文本。
+   */
+  $('#report-text').addEventListener('copy', (e) => {
+    if (!e.clipboardData) return;
+    const sel = window.getSelection();
+    const partial = sel && !sel.isCollapsed ? sel.toString() : '';
+    e.clipboardData.setData('text/plain', partial || S.reportText || $('#report-text').textContent);
+    // 刻意不写 HTML 格式的剪贴板数据：粘贴到 Word / 微信 / 笔记只会得到纯文本
+    e.preventDefault();
+  });
+
+  /** 正文内 Ctrl+A 只选中正文，不会把整个面板的 UI 一起选上。 */
+  $('#report-text').addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'a') {
+      e.preventDefault();
+      selectAllIn($('#report-text'));
+    }
+  });
+
+  /** 全局兜底：历史页里即使焦点不在正文，Ctrl+A 也只选正文（输入框内保留默认行为）。 */
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'a') return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (S.view !== 'history' || $('#report-detail').hidden || !S.reportText) return;
+    e.preventDefault();
+    selectAllIn($('#report-text'));
   });
 
   // ---------------------------------------------------------------- 其它入口

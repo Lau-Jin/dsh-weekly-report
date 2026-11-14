@@ -311,8 +311,10 @@ input::placeholder, textarea::placeholder { color: #b3bac7; }
 .ws-history__detail.is-collapsed { flex: 0 0 auto; }
 .ws-history__bar { flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .ws-history__meta { font: 11.5px/1.6 var(--mono); color: var(--text-2); word-break: break-all; }
-.ws-report { flex: 1; min-height: 0; max-height: none; overflow: auto; margin: 12px 0 0; padding: 16px; background: #f8f9fc; border: 1px solid var(--line); border-radius: 10px; font: 12.5px/1.9 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.ws-report { flex: 1; min-height: 0; max-height: none; overflow: auto; margin: 12px 0 0; padding: 16px; background: #f8f9fc; border: 1px solid var(--line); border-radius: 10px; font: 12.5px/1.9 var(--mono); white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text; outline: none; }
+.ws-report:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .ws-history__actions { flex: 0 0 auto; display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.ws-report__hint { flex: 0 0 100%; line-height: 1.7; }
 
 /* ------------------------------------------------------------------ 弹窗 / toast */
 .ws-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; }

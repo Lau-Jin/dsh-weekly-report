@@ -243,6 +243,21 @@ try {
   ok('保存设置会写入 schedule 配置', /schedule:\s*\{[\s\S]*?weekday:\s*Number\(\$\('#f-schedule-day'\)\.value\)/.test(jsText), '');
   ok('定时开关切换即时联动控件', /f-schedule-enabled'/.test(jsText) && /is-disabled/.test(cssText), '');
 
+  // 历史页复制：旧 WebView 禁用 Clipboard API 时也能复制，且粘贴结果必须是纯文本
+  ok('复制有 Clipboard API → execCommand 降级', /async function copyText/.test(jsText)
+    && /navigator\.clipboard\.writeText/.test(jsText) && /document\.execCommand\('copy'\)/.test(jsText), '');
+  ok('所有复制入口统一走 copyText', (jsText.match(/await navigator\.clipboard\.writeText/g) || []).length === 1
+    && (jsText.match(/await copyText\(/g) || []).length >= 3, '无裸调用，权限失败不直接报错');
+  ok('复制全文使用服务端原文', /S\.reportText = r\.text \|\| ''/.test(jsText)
+    && /copyText\(text\)/.test(jsText) && /S\.reportText \|\| \$\('#report-text'\)\.textContent/.test(jsText), '');
+  ok('手动复制强制只写纯文本', /\$\('#report-text'\)\.addEventListener\('copy'/.test(jsText)
+    && /setData\('text\/plain'/.test(jsText) && !/setData\('text\/html'/.test(jsText), '不带富文本格式 / 行号');
+  ok('历史页 Ctrl+A 只选正文', /addEventListener\('keydown'[\s\S]*?selectAllIn\(\$\('#report-text'\)\)/.test(jsText)
+    && /S\.view !== 'history'/.test(jsText), '不会全选整个面板 UI');
+  ok('复制失败自动选中全文兜底', /selectAllIn\(\$\('#report-text'\)\);\s*\n\s*toast\('已选中全文/.test(jsText), '');
+  ok('周报正文可选中可聚焦', htmlText.includes('id="report-text" tabindex="0"')
+    && /\.ws-report \{[^}]*user-select: text/.test(cssText), '');
+
   const plugin = JSON.parse(fs.readFileSync(path.join(HERE, 'plugin.json'), 'utf8'));
   ok('plugin.json 声明装上即用', plugin.automatic.autoRegisterBundle === true && plugin.automatic.autoStartService === true, '');
   ok('声明会话数据仅作参考', plugin.dataSource.sessionData === 'design-reference-only', '');

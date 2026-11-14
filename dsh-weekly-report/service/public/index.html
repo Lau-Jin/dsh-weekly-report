@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报工作台</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=1.2.0">
+  <link rel="stylesheet" href="/style.css?v=1.2.1">
 </head>
 <body>
   <div class="ws-app">
@@ -298,10 +298,11 @@
                     <div class="ws-history__meta" id="report-meta"></div>
                     <button class="ws-link" id="btn-toggle-report" type="button" aria-expanded="true">收起内容</button>
                   </div>
-                  <pre class="ws-report ws-scroll" id="report-text"></pre>
+                  <pre class="ws-report ws-scroll" id="report-text" tabindex="0" title="点击正文后按 Ctrl+A 可只选中周报正文；复制结果为纯文本"></pre>
                   <div class="ws-history__actions" id="report-actions">
                     <button class="ws-btn ws-btn--ghost" id="btn-open-report-dir" type="button">打开目录</button>
-                    <button class="ws-btn ws-btn--ghost" id="btn-copy-report" type="button">复制全文</button>
+                    <button class="ws-btn ws-btn--ghost" id="btn-copy-report" type="button" title="复制为纯文本，不带字体、底色或行号">复制全文</button>
+                    <div class="ws-card__hint ws-report__hint">正文可选中；Ctrl+A 只选正文，复制结果为纯文本，不会带上格式或行号。若浏览器限制剪贴板，点「复制全文」会自动选中全文，按 Ctrl+C 即可。</div>
                   </div>
                 </div>
               </div>
@@ -330,6 +331,6 @@
   </div>
 
   <div class="ws-toast" id="toast" hidden></div>
-  <script src="/app.js?v=1.2.0"></script>
+  <script src="/app.js?v=1.2.1"></script>
 </body>
 </html>
