@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "type": "module",
   "description": "周报工作台 · 装上即用的 DSH 完整插件：一键安装、自动常驻、面板零手工启动，按使用者提供的 API Key 与路径模板生成周报与绩效表。",

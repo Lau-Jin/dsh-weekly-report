@@ -386,10 +386,20 @@ async function doVerify() {
   try { linked = path.resolve(fs.realpathSync(TARGET)) === path.resolve(PLUGIN_DIR); } catch { /* ignore */ }
   rec('profile 链接指向本包', linked, TARGET);
   const pkg = readJson(PROFILE_PKG);
-  const dep = (pkg?.dependencies?.[BUNDLE] || '').replace(/^link:/, '');
+  const rawDep = (pkg?.dependencies?.[BUNDLE] || '').trim();
   let depOk = false;
-  try { depOk = path.resolve(dep) === path.resolve(PLUGIN_DIR); } catch { /* ignore */ }
-  rec('dependency 已注册', depOk, pkg?.dependencies?.[BUNDLE] || '未找到');
+  let depDetail = rawDep || '未找到';
+  if (rawDep.startsWith('link:')) {
+    // 旧形态：本地 link 安装，依赖值为 link:<路径>，解析后须指向本包
+    const dep = rawDep.slice('link:'.length);
+    try { depOk = path.resolve(dep) === path.resolve(PLUGIN_DIR); } catch { /* ignore */ }
+  } else if (rawDep) {
+    // 新形态（npm 安装）：依赖为版本范围（如 ^1.2.1），node_modules/<BUNDLE> 物理副本即本包
+    try { depOk = path.resolve(fs.realpathSync(path.join(NM_DIR, BUNDLE))) === path.resolve(PLUGIN_DIR); }
+    catch { /* 物理副本不存在则视为未就绪 */ }
+    depDetail = `${rawDep}（npm 安装）`;
+  }
+  rec('dependency 已注册', depOk, depDetail);
   rec('dsh.profile.bundles 已注册', Boolean(pkg?.dsh?.profile?.bundles?.includes(BUNDLE)), '');
   const patchText = (() => { try { return fs.readFileSync(PROFILE_PATCH, 'utf8'); } catch { return ''; } })();
   rec('cordis.patch.yml insert', /id:\s*weekly-report\b/.test(patchText), '');

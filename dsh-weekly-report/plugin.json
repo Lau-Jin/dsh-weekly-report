@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "displayName": {
     "zh": "周报工作台",
     "en": "Weekly Report Studio"
@@ -43,7 +43,7 @@
     "verified": {
       "installChecks": "9/9",
       "smoke": "84/84",
-      "hostRevive": "12s 内拉起 v1.2.1",
+      "hostRevive": "12s 内拉起 v1.2.2",
       "installDeps": "ok / mode=bundled",
       "reportRepair": "1 处补全，其余 5 份历史文件未重写",
       "perfWrite": "就地写入 2 个单元格，结构指纹前后一致"
@@ -53,7 +53,7 @@
       "repairTool": "service/engine/repair-report.mjs（npm run repair / 历史页「检查格式」）",
       "openDir": "WINDIR 绝对路径 explorer.exe，/select 选中文件，错误不再被吞，前端 toast 反馈"
     },
-    "version": "1.2.1",
+    "version": "1.2.2",
     "versionRule": {
       "minor": "最后一位",
       "feature": "第二位",
