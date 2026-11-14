@@ -53,7 +53,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
   <input class="search" id="q" placeholder="搜索章节…">
   <nav id="nav">
     <a href="#s1">1 · 开始之前</a>
-    <a href="#s2">2 · 一键安装</a>
+    <a href="#s2">2 · 安装（标准流程）</a>
     <a href="#s3">3 · 打开面板</a>
     <a href="#s4">4 · 首次配置</a>
     <a href="#s5">5 · 生成周报</a>
@@ -72,7 +72,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <h1>装上，就能用</h1>
     <p>一条命令完成安装与启动，不用重启 DSH、不用手工拉服务。API Key、输出目录、绩效表与模板由你按需提供，插件负责识别并据此生成、输出。</p>
     <div class="stat">
-      <div><b>v1.2.2</b><small>版本号取自 package.json</small></div>
+      <div><b>v1.3.0</b><small>版本号取自 package.json</small></div>
       <div><b>0 预置凭据</b><small>邮件默认关闭</small></div>
       <div><b>4 个页面</b><small>概览 / 生成 / 设置 / 历史</small></div>
     </div>
@@ -90,26 +90,18 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <div class="note">本插件在开发时参考了 DeepSeek Harness 的历史会话，用来确定周报格式、绩效表规则与界面偏好；<b>运行期间不会读取任何会话内容</b>。数据来源只有研发平台的工单与任务。</div>
   </section>
 
-  <section id="s2" data-t="一键安装 命令 dry-run verify uninstall 参数"><h2>2 · 一键安装</h2>
-    <p><b>推荐：双击即装，全程不用敲命令。</b></p>
-    <table><tr><th>系统</th><th>双击 / 运行</th><th>效果</th></tr>
-      <tr><td>Windows</td><td><code>一键安装.vbs</code>（首选）</td><td>隐藏窗口自动定位 Node → 安装 → 打开中文面板；成功不弹窗，失败才给诊断</td></tr>
-      <tr><td>Windows</td><td><code>一键安装.cmd</code>（备用）</td><td>VBS 被安全策略拦掉时用；控制台显示进度，装完自动开面板</td></tr>
-      <tr><td>macOS</td><td><code>一键安装.command</code></td><td>安装 → 打开面板 → 按回车关闭</td></tr>
-      <tr><td>Linux</td><td><code>bash install.sh</code></td><td>安装 → 打开面板</td></tr>
-    </table>
-    <p>也可以手动执行：</p>
-    <pre><button class="copy">复制</button>node install.mjs</pre>
-    <p>安装器自动完成：定位 Node → 注册插件到 DSH profile → 确保 <code>cordis.patch.yml</code> 的 bundle 声明 → 写入兼容转发 → 确保绩效表组件 → 启动面板服务。加 <code>--open</code> 可让命令方式也自动打开浏览器。</p>
-    <div class="note">为什么还要「双击」这一次：安装要改三处 DSH 配置（profile 里的 <code>node_modules</code> 链接、<code>package.json</code> 的 bundle 依赖、<code>cordis.patch.yml</code> 的 insert 块），必须由本机进程去写，DSH 运行时不会扫描任意目录把插件挂上来。双击只是触发器，不需要敲命令。环境依赖只有三条：Node ≥ 20（DSH 自带）、profile 目录可写、Windows/macOS/Linux 任一；不需要联网，也不需要 npm 安装。</div>
+  <section id="s2" data-t="安装 标准流程 pnpm 升级 卸载 命令"><h2>2 · 安装（标准流程）</h2>
+    <p><b>推荐：通过 npm 安装，全程不用本地脚本。</b>本插件是纯 npm 包，安装、升级、卸载都走标准流程。</p>
+    <p>在 DSH 的 profile 目录（<code>%USERPROFILE%\.dsh\profiles\desktop</code>）执行：</p>
+    <pre><button class="copy">复制</button>pnpm add dsh-weekly-report-lau</pre>
+    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.3.0"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
+    <div class="note">不需要重启 DSH：新包就位后，宿主下一次心跳（≤20 秒）即拉起新版本面板；若侧边栏没刷新，点面板里的刷新即可。环境依赖只有两条：Node ≥ 20（DSH 自带）、profile 目录可写；不依赖联网（绩效表组件已随包自带），不需要 Python 或外部服务。</div>
     <table><tr><th>命令</th><th>用途</th></tr>
-      <tr><td><code>node install.mjs --dry-run</code></td><td>预览改动，不写任何文件</td></tr>
-      <tr><td><code>node install.mjs --verify</code></td><td>校验 9 项安装状态</td></tr>
-      <tr><td><code>node install.mjs --uninstall</code></td><td>一键回滚，保留使用者数据</td></tr>
-      <tr><td><code>node install.mjs --profile=web</code></td><td>装到指定 profile（默认 desktop）</td></tr>
-      <tr><td><code>node install.mjs --json</code></td><td>机器可读输出，便于脚本集成</td></tr>
+      <tr><td><code>pnpm add dsh-weekly-report-lau</code></td><td>安装 / 升级到最新版</td></tr>
+      <tr><td><code>pnpm remove dsh-weekly-report-lau</code></td><td>卸载，使用者数据完整保留</td></tr>
+      <tr><td><code>npm run repair</code></td><td>检查并修复历史周报里被切断的记录</td></tr>
     </table>
-    <div class="note ok">重复运行是幂等的：已装好会显示「已是最新」，不会重复写配置或覆盖你的其它插件。</div>
+    <div class="note ok">纯 npm 包，无本地安装脚本、无兼容转发：注册 bundle 的动作由 DSH 在 <code>pnpm install</code> 时按包元数据自动完成。</div>
   </section>
 
   <section id="s3" data-t="打开面板 侧边栏 端口 8798 免重启 浏览器"><h2>3 · 打开面板</h2>
@@ -197,7 +189,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
 
   <section id="s10" data-t="常见问题 FAQ 端口占用 识别不到 生成失败 绩效表报错"><h2>10 · 常见问题</h2>
     <table><tr><th>现象</th><th>处理</th></tr>
-      <tr><td>侧边栏没出现「周报」/ 还是旧界面</td><td>跑 <code>node install.mjs --verify</code>；确认 <code>cordis.patch.yml</code> 里有 <code>weekly-report</code> 的 insert。刷新面板；若仍不行，完全退出 DSH 再打开一次即可（兼容转发已保证服务是新版本）。</td></tr>
+      <tr><td>侧边栏没出现「周报」/ 还是旧界面</td><td>确认 profile 的 <code>package.json</code> 依赖里有 <code>dsh-weekly-report-lau</code>，且 <code>pnpm ls dsh-weekly-report-lau</code> 显示已装；刷新面板；若仍不行，完全退出 DSH 再打开一次即可（宿主心跳会自动拉起新版本）。</td></tr>
       <tr><td>面板打不开</td><td>先确认 <code>http://127.0.0.1:8798/api/ping</code> 能返回 JSON；服务由 Host 半身每 20 秒自动拉起，也可重跑一次安装。</td></tr>
       <tr><td>生成时提示连不上研发平台</td><td>检查 MCP 地址与 API Key；设置页有「测试连接」。</td></tr>
       <tr><td>补装绩效表组件失败</td><td>旧版会因面板服务环境里没有 npm 而报 <code>'node' 不是内部或外部命令</code>；新版组件已随包自带、按钮直接返回「已自带，无需补装」。若确实精简过包，按钮会用 Node 绝对路径自动安装，失败时输出区会给出可复制的手动命令。</td></tr>
@@ -207,14 +199,14 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
       <tr><td>周报里出现「11月9日-30日」这类越界时间</td><td>v1.1.0 起未完成事项一律写到<b>本周周日</b>，且任何一条都不越过本周。若看到旧文件，重新生成一次即可。</td></tr>
       <tr><td>担心绩效表被改动</td><td>「设置 → 绩效表模板 → 检测表格结构」先看要写哪些格子；每次写入前原表自动备份到同目录 <code>.perf-backup\</code>，直接复制回来就能还原。默认不会插行移动考核区块。</td></tr>
       <tr><td>端口被别的程序占用</td><td>设置环境变量 <code>WEEKLY_PANEL_PORT</code> 换端口，同步修改侧边栏的面板地址。</td></tr>
-      <tr><td>换电脑 / 分发给同事</td><td>整个插件目录拷过去，在那台机器跑一次 <code>node install.mjs</code>；数据目录各自独立，不会带走过任何凭据。</td></tr>
+      <tr><td>换电脑 / 分发给同事</td><td>在那台机器的 DSH profile 目录执行 <code>pnpm add dsh-weekly-report-lau</code> 即可，数据目录各自独立，不会带走过任何凭据。</td></tr>
     </table>
   </section>
 
-  <section id="s11" data-t="卸载 回滚 uninstall 备份 数据保留"><h2>11 · 卸载与回滚</h2>
-    <pre><button class="copy">复制</button>node install.mjs --uninstall</pre>
-    <p>会恢复原来的 <code>node_modules</code> 链接、<code>package.json</code> 依赖与 bundle 清单、旧版 <code>service/server.cjs</code>，并移除安装器自动插入的配置块。使用者数据目录（配置、Key、历史周报、日志）<b>完整保留</b>，不删除任何文件。</p>
-    <p>安装时对 <code>package.json</code>、<code>cordis.patch.yml</code>、<code>config.json</code> 都做了时间戳备份；原插件链接与旧 server.cjs 会被挪到数据目录的 <code>backups/</code> 而不是直接删掉。</p>
+  <section id="s11" data-t="卸载 回滚 pnpm remove 备份 数据保留"><h2>11 · 卸载与回滚</h2>
+    <pre><button class="copy">复制</button>pnpm remove dsh-weekly-report-lau</pre>
+    <p>会移除 profile 的依赖与 bundle 清单，并卸载插件。使用者数据目录（配置、Key、历史周报、日志）<b>完整保留</b>，不删除任何文件。</p>
+    <p>也可以从 DSH 插件页直接卸载，效果一致。</p>
   </section>
 
   <section id="s12" data-t="安全 只读 127.0.0.1 凭据 目录穿越 备份 数据"><h2>12 · 安全说明</h2>

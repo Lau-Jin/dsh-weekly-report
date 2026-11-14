@@ -1,11 +1,11 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "displayName": {
     "zh": "周报工作台",
     "en": "Weekly Report Studio"
   },
-  "description": "装上即用的 DSH 周报插件：一键安装并自动常驻，按使用者提供的 API Key、周报模板与绩效表路径生成周报。面板美观简洁，邮件默认关闭，不预置任何凭据。",
+  "description": "装上即用的 DSH 周报插件：即装即用并自动常驻，按使用者提供的 API Key、周报模板与绩效表路径生成周报。面板美观简洁，邮件默认关闭，不预置任何凭据。",
   "keywords": [
     "dsh",
     "weekly-report",
@@ -21,29 +21,16 @@
     "web": "service/public/index.html"
   },
   "automatic": {
-    "doubleClickInstall": {
-      "win32": "一键安装.vbs",
-      "darwin": "一键安装.command",
-      "linux": "install.sh",
-      "note": "双击即装：自动定位 Node、注册 bundle、启动服务并打开面板；成功不弹窗，无需命令行输入。cmd 版本用于 VBS 被安全策略拦截的环境",
-      "win32Alt": "一键安装.cmd"
-    },
-    "install": "node install.mjs",
-    "verify": "node install.mjs --verify",
-    "uninstall": "node install.mjs --uninstall",
-    "dryRun": "node install.mjs --dry-run",
     "autoRegisterBundle": true,
     "autoStartService": true,
     "autoKeepAliveMs": 20000,
     "port": 8798,
     "requiresRestart": false,
-    "legacyHostBridge": "把旧路径 service/server.cjs 备份后换成一行转发，让 DSH 宿主心跳拉起新面板；卸载时恢复",
-    "perfComponent": "完整包自带 node_modules/exceljs，零网络可用；缺失时 service/perf-deps.cjs 用 Node 绝对路径直调 npm-cli.js 自动补装（不依赖 PATH/shell）",
-    "hostBootstrap": "从 DSH 插件页直装时，Host 半身也会自举数据目录、面板服务与绩效表组件",
+    "perfComponent": "完整包自带 node_modules/exceljs，零网络可用；缺失时设置页可一键补装",
+    "hostBootstrap": "作为 npm 包安装后，Host 半身自动自举数据目录、面板服务与绩效表组件，并由宿主心跳每 20s 保活",
     "verified": {
-      "installChecks": "9/9",
       "smoke": "84/84",
-      "hostRevive": "12s 内拉起 v1.2.2",
+      "hostRevive": "12s 内拉起 v1.3.0",
       "installDeps": "ok / mode=bundled",
       "reportRepair": "1 处补全，其余 5 份历史文件未重写",
       "perfWrite": "就地写入 2 个单元格，结构指纹前后一致"
@@ -53,25 +40,12 @@
       "repairTool": "service/engine/repair-report.mjs（npm run repair / 历史页「检查格式」）",
       "openDir": "WINDIR 绝对路径 explorer.exe，/select 选中文件，错误不再被吞，前端 toast 反馈"
     },
-    "version": "1.2.2",
+    "version": "1.3.0",
     "versionRule": {
       "minor": "最后一位",
       "feature": "第二位",
       "major": "第一位",
       "source": "package.json（服务与面板都读它，不再写死）"
-    },
-    "installAutomation": {
-      "why": "注册插件要写 profile 的 node_modules 链接、package.json 依赖与 cordis.patch.yml insert，必须由本机进程执行",
-      "alternatives": [
-        "双击 一键安装.vbs / 一键安装.cmd",
-        "DSH 插件页添加本目录（Host 半身自举）",
-        "node install.mjs"
-      ],
-      "deps": [
-        "Node >= 20（DSH 自带）",
-        "profile 目录可写",
-        "无需联网/无需 npm"
-      ]
     }
   },
   "configuration": {
@@ -147,7 +121,7 @@
   },
   "distribution": {
     "fullPackage": "保留 node_modules/（exceljs 及依赖），绩效表功能完全离线可用",
-    "slimPackage": "删除 node_modules/ 时由 install.mjs 或设置页自动补装，核心周报 txt 仍零依赖",
+    "slimPackage": "删除 node_modules/ 时由设置页自动补装，核心周报 txt 仍零依赖",
     "noBundledCredentials": true
   },
   "requirements": {
@@ -163,6 +137,6 @@
     "listen": "127.0.0.1 only",
     "credentials": "never bundled",
     "sourceData": "read-only",
-    "rollback": "node install.mjs --uninstall"
+    "rollback": "从 DSH 插件页卸载，或在 profile 目录执行 pnpm remove dsh-weekly-report-lau"
   }
 }

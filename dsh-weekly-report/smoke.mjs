@@ -156,15 +156,15 @@ try {
   ], loadReportTemplate());
   ok('新周报不再出现空学校行', !/【交付部署】\n\s*\n/.test(rendered) && rendered.trim().split(/\n\s*\n/).length === 1, '');
 
-  // 零命令安装入口
-  ok('四个平台/入口都有双击安装文件', ['一键安装.vbs', '一键安装.cmd', '一键安装.command', 'install.sh']
-    .every((f) => fs.existsSync(path.join(HERE, f))), '');
-  const vbs = fs.readFileSync(path.join(HERE, '一键安装.vbs'));
-  ok('VBS 安装脚本纯 ASCII（避免 WSH 中文乱码）', [...vbs].every((b) => b <= 127), '');
-  const cmd = fs.readFileSync(path.join(HERE, '一键安装.cmd'));
-  ok('CMD 安装脚本纯 ASCII（避免 cmd 代码页乱码）', [...cmd].every((b) => b <= 127), '');
-  const installer = fs.readFileSync(path.join(HERE, 'install.mjs'), 'utf8');
-  ok('安装器支持 --open / --result-file', /--open/.test(installer) && /--result-file/.test(installer), '');
+  // 标准安装形态：纯 npm 包，不再携带本地 link 安装器 / 一键脚本
+  const pkgJson2 = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8'));
+  ok('package.json 不携带 install.mjs 本地安装器', !/\binstall\.mjs\b/.test(JSON.stringify(pkgJson2)), '');
+  ok('files 不含一键安装脚本', !['一键安装.vbs', '一键安装.cmd', '一键安装.command', 'install.sh']
+    .some((f) => (pkgJson2.files || []).includes(f)), '');
+  const patchText2 = fs.readFileSync(path.join(HERE, 'cordis.patch.yml'), 'utf8');
+  ok('cordis.patch.yml 挂载 weekly-report bundle', /id:\s*weekly-report\b/.test(patchText2), '');
+  ok('未残留旧宿主转发 / 兼容桥接代码', !fs.readFileSync(path.join(HERE, 'plugin.json'), 'utf8').includes('legacyHostBridge')
+    && !fs.readFileSync(path.join(HERE, 'lib/index.js'), 'utf8').includes('install.mjs'), '');
 
   // 绩效表：版式识别 + 只改目标格子（用临时生成的小表跑，不碰使用者真实文件）
   const { detectPerfLayout, structureSignature } = await import('./service/engine/lib/perf-map.mjs');

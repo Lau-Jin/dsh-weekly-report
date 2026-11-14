@@ -107,7 +107,7 @@ async function ensureService() {
 /**
  * 自举绩效表组件：完整包自带 node_modules 时是零成本的同步判断；
  * 精简包（例如从 DSH 插件页安装）才在后台异步补装，不阻塞 DSH 启动。
- * 这样无论用 node install.mjs 还是插件页直装，能力都一致。
+ * 这样无论用 pnpm 安装还是插件页直装，能力都一致。
  */
 let bootstrapped = false
 function bootstrapPerfDeps() {
