@@ -9,7 +9,7 @@
  */
 import { DEFAULT_TASK_LINK } from './config.mjs';
 import {
-  fmtRange, isoDate, makeDate, pyRound, stripSchoolPrefix, splitSchool, resolveSchool, toDate, todayCn,
+  fmtRange, isoDate, makeDate, pyRound, stripSchoolPrefix, splitSchool, resolveSchool, toDate, todayCn, weekEndOf,
 } from './util.mjs';
 
 export const CATEGORY_MAP = {
@@ -108,6 +108,90 @@ export function worklogDates(wls) {
     if (d) map.set(isoDate(d), d);
   }
   return [...map.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map((e) => e[1]);
+}
+
+/**
+ * 补创工单判定（v1.3.1 新增规则）。
+ *
+ * 场景：先干活、后补单——工单 11/9 才创建，但工时填的是 11/6。
+ * 规则：只要「最早的工时日期」早于「工单创建日期」，周报里这条的
+ *       「时间」起点就以工时日期为准，不再用建单时间。
+ *
+ * 产出约束（口径二）：采集阶段会恢复识别这类工单（不再整条丢弃），
+ * 但是否写进某一份周报，仍严格按该周报的生成周期判定——
+ * 工时日期不落在 [ws, we] 内时「识别但不生产」。
+ *
+ * @param {object} item 条目，需含 created / work_dates（或 backfill_dates）
+ * @param {Date} ws 生成周期起
+ * @param {Date} we 生成周期止
+ * @returns {{ backfilled: boolean, start: Date|null, inPeriod: boolean }}
+ *   backfilled 是否为补创工单；start 应作为时间起点的工时日；inPeriod 工时是否落在本期
+ */
+export function backfillTimeBase(item, ws, we) {
+  const created = toDate(item && item.created);
+  if (!created) return { backfilled: false, start: null, inPeriod: false };
+  const dates = [...new Set([
+    ...((item && item.backfill_dates) || []),
+    ...((item && item.work_dates) || []),
+  ])].map(toDate).filter(Boolean).sort((a, b) => (a < b ? -1 : 1));
+  if (!dates.length) return { backfilled: false, start: null, inPeriod: false };
+  const first = dates[0];
+  // earliestWorkDate：优先用全量工时日期（含本期之前的），没有才退回本期工时
+  const earliest = toDate(item && item.earliest_work_date) || first;
+  if (!(earliest < created)) return { backfilled: false, start: null, inPeriod: false };
+  return { backfilled: true, start: earliest, inPeriod: Boolean(earliest >= ws && earliest <= we) };
+}
+
+/**
+ * 某条事项在某一周周报里的时间字段（v1.3.1 抽出，供回归测试直接调用）。
+ *
+ * 口径一：补创工单（工时日早于建单日）→ 起点用工时日，终点沿用现口径
+ *         （已完成取完成日，未完成拉到本周周日）。
+ * 口径二：工时日不在本次生成跨度内（跨月补创）→ 返回 null 表示「识别但不生产」。
+ *
+ * @param {object} it 条目（work_dates / created / settled / d2 / week_marks / settled_platform / completion）
+ * @param {Date} weekStart 本周起
+ * @param {Date} weekEnd 本周末
+ * @param {Date} spanStart 本次生成跨度起（用于判定工时是否属于本次生成周期）
+ * @param {Date} spanEnd 本次生成跨度止
+ * @returns {{ d1: string, d2: string, time: string, settled: boolean, progress?: string }|null}
+ *          null = 本周不产出该条目
+ */
+export function weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd) {
+  const dates = (it.work_dates || []).map(toDate).filter(Boolean);
+  const inWeek = dates.filter((d) => d >= weekStart && d <= weekEnd);
+  const fmt = (start, end) => fmtRange(start, end);
+
+  if (!inWeek.length) {
+    const created = toDate(it.created);
+    if (!created || !(created >= weekStart && created <= weekEnd)) return null;
+    const bf = backfillTimeBase(it, spanStart, spanEnd);
+    if (bf.backfilled && !bf.inPeriod) return null; // 跨期补创：识别但不生产
+    const start = bf.backfilled ? bf.start : created;
+    const openEnd = weekEndOf(created) > weekEnd ? weekEnd : weekEndOf(created);
+    const end = it.settled ? (toDate(it.d2) || start) : openEnd;
+    return { d1: isoDate(start), d2: isoDate(end), time: fmt(start, end), settled: Boolean(it.settled) };
+  }
+
+  const w1 = inWeek[0];
+  const w2 = inWeek[inWeek.length - 1];
+  const marks = (it.week_marks || {})[isoDate(weekStart)] || {};
+  const comp = it.completion || '';
+  const doneByPlatform = Boolean(it.settled_platform && comp
+    && isoDate(weekStart) <= comp && comp <= isoDate(weekEnd));
+  const settled = Boolean(Boolean(marks.done) || doneByPlatform);
+  const end = settled ? w2 : (weekEndOf(w1) > weekEnd ? weekEnd : weekEndOf(w1));
+  // 补创工单：即使本周已有工时，起点仍取全量工时里最早的那天（工时日早于建单日时）
+  const bf = backfillTimeBase(it, spanStart, spanEnd);
+  if (bf.backfilled && !bf.inPeriod) return null;
+  const start = bf.backfilled && bf.start < w1 ? bf.start : w1;
+  return {
+    d1: isoDate(start),
+    d2: isoDate(end),
+    time: fmt(start, end),
+    settled,
+    progress: settled ? '100%' : (marks.progress ? `${Math.trunc(marks.progress)}%` : undefined),
+  };
 }
 
 /** 完成日期（对应 completion_date） */
@@ -226,10 +310,11 @@ export function buildItemsFromTickets(tickets, worklogs, handler, ws, we, opts =
     const isMine = Boolean(handler) && String(t.handler || '').includes(handler);
     const taskIsMine = myTaskIds.has(taskId);
     const allDates = worklogDates(allWls);
-    // 补充工单：本周期新建、但工时都记在本周期之前（先干活后补单）
+    // 跨期补创工单（v1.3.1）：本周期新建，但工时日期全在生成跨度之前。
+    // 按口径二「识别但不生产」：本工单条目不产出（避免上月活儿重复报进本月周报），
+    // 但不再登记 skipTaskIds —— 任务中心若本期有该任务的活动，仍照常收录（恢复识别）。
     if (createdInPeriod && !pDates.length && allWls.length) {
       suppN += 1;
-      if (skipTaskIds && taskId) skipTaskIds.add(taskId);
       continue;
     }
     const updated = toDate(String(t.updated_at || '').slice(0, 10));
@@ -348,6 +433,9 @@ export function buildItemsFromTickets(tickets, worklogs, handler, ws, we, opts =
       settled: completedInPeriod,
       done: completedInPeriod,
       work_dates: pDates.map(isoDate),
+      // v1.3.1 补创工单：全量工时日期（含生成周期之前的），供 itemsOfWeek 判定时间基准
+      earliest_work_date: allDates.length ? isoDate(allDates[0]) : '',
+      backfill_dates: allDates.map(isoDate),
       week_marks: weekMarks(allWls),
       completion: completion ? isoDate(completion) : '',
       settled_platform: Boolean(settled),
@@ -401,7 +489,8 @@ export function buildItemsFromTasks(tasks, worklogs, handler, ws, we, opts = {})
     }
     const isOwner = String(t.is_owner ?? t.isOwner ?? '') === '1';
     const allWls = byTask.get(tid) || [];
-    const pDates = worklogDates(allWls).filter((d) => d >= ws && d <= we);
+    const allDates = worklogDates(allWls);
+    const pDates = allDates.filter((d) => d >= ws && d <= we);
     const created = toDate(String(t.created_at || t.createdAt || '').slice(0, 10));
     const createdInPeriod = Boolean(created && created >= ws && created <= we);
 
@@ -546,6 +635,8 @@ export function buildItemsFromTasks(tasks, worklogs, handler, ws, we, opts = {})
       settled: completedInPeriod,
       done: completedInPeriod,
       work_dates: pDates.map(isoDate),
+      earliest_work_date: allDates.length ? isoDate(allDates[0]) : '',
+      backfill_dates: allDates.map(isoDate),
       week_marks: weekMarks(allWls),
       completion: completion ? isoDate(completion) : '',
       settled_platform: Boolean(done),
@@ -583,6 +674,10 @@ export function mergeItems(...groups) {
       if (comps.length) cur.completion = comps[0];
       cur.week_marks = { ...(cur.week_marks || {}), ...(it.week_marks || {}) };
       cur.work_dates = [...new Set([...(cur.work_dates || []), ...(it.work_dates || [])])].sort();
+      // v1.3.1：补创工单的全量工时日期也要合并，取更早者，避免合并后时间基准丢失
+      cur.backfill_dates = [...new Set([...(cur.backfill_dates || []), ...(it.backfill_dates || [])])].sort();
+      const earlys = [cur.earliest_work_date, it.earliest_work_date].filter(Boolean).sort();
+      if (earlys.length) cur.earliest_work_date = earlys[0];
       const p1 = parseInt(String(cur.progress || '0').replace('%', ''), 10) || 0;
       const p2 = parseInt(String(it.progress || '0').replace('%', ''), 10) || 0;
       cur.progress = `${Math.max(p1, p2)}%`;

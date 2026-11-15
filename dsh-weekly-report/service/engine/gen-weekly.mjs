@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_HANDLER, DEFAULT_MCP_URL, DEFAULT_THRESHOLD, ENGINE_DIR, applyConfig, defaultOutPath, enableLog, resolveToken } from './lib/config.mjs';
 import { collectItems } from './lib/collect.mjs';
+import { weekTimeOf } from './lib/rules.mjs';
 import { McpClient, mcpError } from './lib/mcp.mjs';
 import { currentWeek, lastMonthRange, monthRange, parseMonth, weeksInRange } from './lib/period.mjs';
 // 绩效表功能（exceljs）按需加载：纯周报生成不需要它，缺依赖时给出可执行的提示而不是一堆堆栈
@@ -33,7 +34,7 @@ async function perfLib() {
 }
 import { buildMailHtml, notify, notifyCfg, perfTableHtml } from './lib/notify.mjs';
 import { loadReportTemplate, renderReport } from './lib/render.mjs';
-import { fmtRange, isoDate, makeDate, todayCn, toDate, weekEndOf } from './lib/util.mjs';
+import { fmtRange, isoDate, makeDate, todayCn, toDate } from './lib/util.mjs';
 
 const FLAGS = new Set([
   'last-month', 'auto-file', 'log', 'no-cache', 'no-tasks', 'perf-auto', 'perf-template-check',
@@ -272,39 +273,13 @@ async function main() {
   const itemsOfWeek = (weekStart, weekEnd) => {
     const out = [];
     for (const it of allItems) {
-      const dates = (it.work_dates || []).map(toDate).filter(Boolean);
-      const inWeek = dates.filter((d) => d >= weekStart && d <= weekEnd);
-      if (!inWeek.length) {
-        const created = toDate(it.created);
-        if (!created || !(created >= weekStart && created <= weekEnd)) continue;
-        // 本周新建、还没记工时的条目：沿用开始时间，结束时间同样不许越过本周周日
-        const copy = { ...it };
-        const openEnd = weekEndOf(created) > weekEnd ? weekEnd : weekEndOf(created);
-        copy.d1 = isoDate(created);
-        copy.d2 = isoDate(copy.settled ? (toDate(it.d2) || created) : openEnd);
-        copy.time = fmtRange(created, toDate(copy.d2));
-        out.push(copy);
-        continue;
-      }
-      const w1 = inWeek[0];
-      const w2 = inWeek[inWeek.length - 1];
-      const copy = { ...it };
-      const marks = (it.week_marks || {})[isoDate(weekStart)] || {};
-      const doneByRemark = Boolean(marks.done);
-      const comp = it.completion || '';
-      const doneByPlatform = Boolean(it.settled_platform && comp
-        && isoDate(weekStart) <= comp && comp <= isoDate(weekEnd));
-      copy.settled = Boolean(doneByRemark || doneByPlatform);
-      copy.done = copy.settled;
+      // 时间口径统一由 rules.mjs 的 weekTimeOf 计算（含 v1.3.1 补创工单规则），
+      // 便于冒烟测试直接对生产代码做回归，避免两处逻辑漂移。
+      const wt = weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd);
+      if (!wt) continue;
+      const copy = { ...it, d1: wt.d1, d2: wt.d2, time: wt.time, settled: wt.settled, done: wt.settled };
       if (copy.settled) copy.progress = '100%';
-      else if (marks.progress) copy.progress = `${Math.trunc(marks.progress)}%`;
-
-      // 周报时间口径：本周未完成的事项，结束时间取「本周周日」，
-      // 不能写成月末 / 未来日期，否则周报里会出现越过本周的时间。
-      const endDate = copy.settled ? w2 : (weekEndOf(w1) > weekEnd ? weekEnd : weekEndOf(w1));
-      copy.d1 = isoDate(w1);
-      copy.d2 = isoDate(endDate);
-      copy.time = fmtRange(w1, endDate);
+      else if (wt.progress) copy.progress = wt.progress;
       out.push(copy);
     }
     // 兜底：周报里的时间一律不越过本周周日（未完成的事项尤其容易写成月末/未来）

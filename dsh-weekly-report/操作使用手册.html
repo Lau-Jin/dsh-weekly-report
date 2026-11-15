@@ -72,7 +72,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <h1>装上，就能用</h1>
     <p>一条命令完成安装与启动，不用重启 DSH、不用手工拉服务。API Key、输出目录、绩效表与模板由你按需提供，插件负责识别并据此生成、输出。</p>
     <div class="stat">
-      <div><b>v1.3.0</b><small>版本号取自 package.json</small></div>
+      <div><b>v1.3.1</b><small>版本号取自 package.json</small></div>
       <div><b>0 预置凭据</b><small>邮件默认关闭</small></div>
       <div><b>4 个页面</b><small>概览 / 生成 / 设置 / 历史</small></div>
     </div>
@@ -94,7 +94,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <p><b>推荐：通过 npm 安装，全程不用本地脚本。</b>本插件是纯 npm 包，安装、升级、卸载都走标准流程。</p>
     <p>在 DSH 的 profile 目录（<code>%USERPROFILE%\.dsh\profiles\desktop</code>）执行：</p>
     <pre><button class="copy">复制</button>pnpm add dsh-weekly-report-lau</pre>
-    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.3.0"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
+    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.3.1"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
     <div class="note">不需要重启 DSH：新包就位后，宿主下一次心跳（≤20 秒）即拉起新版本面板；若侧边栏没刷新，点面板里的刷新即可。环境依赖只有两条：Node ≥ 20（DSH 自带）、profile 目录可写；不依赖联网（绩效表组件已随包自带），不需要 Python 或外部服务。</div>
     <table><tr><th>命令</th><th>用途</th></tr>
       <tr><td><code>pnpm add dsh-weekly-report-lau</code></td><td>安装 / 升级到最新版</td></tr>
@@ -168,7 +168,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
       <li>写入 .xlsx 需要 <code>exceljs</code>：<b>完整安装包已随包自带</b>，设置页会显示「已就绪 · 随包自带」，点「重新检测组件」也只是确认状态，不会重复安装。若为了减小体积删掉了 <code>node_modules/</code>，点「检测 / 补装组件」会自动装回；输出区可收起，失败时会给出可复制的手动命令。</li>
       <li>未装时纯周报 txt 仍可正常生成，不会报堆栈错误。</li>
     </ul>
-    <div class="note">时间口径：<b>已完成</b>写了开始~实际完成；<b>未完成</b>写开始~<b>本周周日</b>，不会出现「11月9日-30日」这种越过本周的写法。绩效表里的日期用模板该列原有的显示格式，不强行改成别的样式。</div>
+    <div class="note">时间口径：<b>已完成</b>写了开始~实际完成；<b>未完成</b>写开始~<b>本周周日</b>，不会出现「11月9日-30日」这种越过本周的写法。<b>补创工单（v1.3.1）</b>：工时日期早于工单创建日期时，起点以<b>工时日期</b>为准（例：11/9 建单、工时填 11/6 → 未完成写「11月6日-15日」）；跨月补创工单虽被识别，但工时不在本次生成周期内就不写进本期周报。绩效表里的日期用模板该列原有的显示格式，不强行改成别的样式。</div>
   </section>
 
   <section id="s8" data-t="历史 引用内容 附件 链接 预览 搜索 复制"><h2>8 · 历史与引用内容</h2>
