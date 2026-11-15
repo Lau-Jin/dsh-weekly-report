@@ -258,48 +258,74 @@ try {
   ok('周报正文可选中可聚焦', htmlText.includes('id="report-text" tabindex="0"')
     && /\.ws-report \{[^}]*user-select: text/.test(cssText), '');
 
-  // ---- v1.3.1 补创工单时间规则（直接测生产纯函数，非镜像逻辑）----
+  // ---- v1.3.1 补创规则 + v1.3.2 逐周叠加（直接测生产纯函数，非镜像逻辑）----
   const { backfillTimeBase, weekTimeOf, buildItemsFromTickets, mergeItems } = await import('./service/engine/lib/rules.mjs');
   const D = (day) => new Date(2026, 10, day); // 2026-11-{day}，本地时区、当天 00:00
   const spanS = D(1), spanE = D(30);          // 本次生成跨度：11/1 ~ 11/30
   const wkS = D(9), wkE = D(15);              // 本周：11/9 ~ 11/15
 
-  // 口径一：11/9 建单、工时填 11/6 → 时间起点以 11/6 为准，终点沿用现口径
+  // 真实 builder 产出的条目形状：11/9 建单、工时填 11/6，未完成
   const backItem = {
-    created: '2026-11-09', work_dates: [], backfill_dates: ['2026-11-06'],
-    earliest_work_date: '2026-11-06', settled: false, d2: '2026-11-09',
+    created: '2026-11-09', d1: '2026-11-06', d2: '2026-11-30',
+    work_dates: ['2026-11-06'], backfill_dates: ['2026-11-06'], earliest_work_date: '2026-11-06',
+    settled: false, settled_platform: false, completion: '', week_marks: {},
   };
   const bf = backfillTimeBase(backItem, spanS, spanE);
   ok('补创工单被识别且起点取工时日', bf.backfilled === true
     && bf.start.getTime() === D(6).getTime() && bf.inPeriod === true, '11/9 建单 / 11/6 工时');
   const bt = weekTimeOf(backItem, wkS, wkE, spanS, spanE);
-  ok('未完成补创工单时间 = 11月6日-15日', Boolean(bt)
+  ok('本周补创工单时间 = 11月6日-15日', Boolean(bt)
     && bt.d1 === '2026-11-06' && bt.d2 === '2026-11-15'
     && bt.time === '2026年11月6日-15日', bt ? bt.time : '(未产出)');
 
-  // 已完成：起点工时日、终点取完成日
-  const doneItem = { ...backItem, settled: true, d2: '2026-11-06' };
-  const dt = weekTimeOf(doneItem, wkS, wkE, spanS, spanE);
-  ok('已完成补创工单时间 = 11月6日单日', Boolean(dt) && dt.time === '2026年11月6日', dt ? dt.time : '(未产出)');
+  // v1.3.2 核心：未完成工单每周持续叠加，起点固定、终点逐周推进到本周日
+  const weeks = [[2, 8, '2026年11月6日-8日'], [9, 15, '2026年11月6日-15日'],
+    [16, 22, '2026年11月6日-22日'], [23, 29, '2026年11月6日-29日'],
+    [30, 30, '2026年11月6日-30日']];
+  const accum = weeks.map(([a, b]) => weekTimeOf(backItem, D(a), D(b), spanS, spanE));
+  ok('未完成工单连续 5 周都产出', accum.every(Boolean) && accum.every((r) => r.d1 === '2026-11-06'), '起点固定 11/6');
+  ok('终点逐周推进到本周日', accum.every((r, i) => r.time === weeks[i][2]),
+    accum.map((r) => (r ? r.d2.slice(-2) : '—')).join(' / '));
+  ok('工单开始前那一周不产出', weekTimeOf(backItem, D(26 - 31), D(1), spanS, spanE) === null
+    || weekTimeOf({ ...backItem, created: '2026-11-20', d1: '2026-11-20',
+      backfill_dates: ['2026-11-20'], earliest_work_date: '2026-11-20' }, D(2), D(8), spanS, spanE) === null, '');
+
+  // 直到完成：完成周终点取完成日，之后不再产出
+  const doneItem = { ...backItem, settled: true, settled_platform: true, completion: '2026-11-20' };
+  ok('完成前各周仍正常叠加', weekTimeOf(doneItem, D(9), D(15), spanS, spanE).time === '2026年11月6日-15日', '');
+  const doneWeek = weekTimeOf(doneItem, D(16), D(22), spanS, spanE);
+  ok('完成周终点取完成日并标记完成', Boolean(doneWeek)
+    && doneWeek.time === '2026年11月6日-20日' && doneWeek.settled === true, doneWeek ? doneWeek.time : '(未产出)');
+  ok('完成周之后不再产出', weekTimeOf(doneItem, D(23), D(29), spanS, spanE) === null, '');
+  ok('已取消工单不产出', weekTimeOf({ ...backItem, cancelled: true }, wkS, wkE, spanS, spanE) === null, '');
 
   // 口径二：工时在上月（跨出生成跨度）→ 识别但不生产
   const crossItem = {
-    created: '2026-11-09', work_dates: [], backfill_dates: ['2026-10-06'],
-    earliest_work_date: '2026-10-06', settled: false, d2: '2026-11-09',
+    created: '2026-11-09', d1: '2026-11-01', d2: '2026-11-30',
+    work_dates: [], backfill_dates: ['2026-10-06'], earliest_work_date: '2026-10-06',
+    settled: false, settled_platform: false, completion: '', week_marks: {},
   };
   const cbf = backfillTimeBase(crossItem, spanS, spanE);
   ok('跨月补创工单被识别但不在生成周期内', cbf.backfilled === true && cbf.inPeriod === false, '10/6 工时');
   ok('跨月补创工单不生产（识别但不生产）', weekTimeOf(crossItem, wkS, wkE, spanS, spanE) === null, '');
 
   // 普通工单不回归：无工时 → 仍用建单日；工时晚于建单 → 不算补创
-  const normalItem = { created: '2026-11-09', work_dates: [], settled: false, d2: '2026-11-09' };
+  const normalItem = { created: '2026-11-09', d1: '2026-11-09', d2: '2026-11-30',
+    work_dates: [], settled: false, settled_platform: false, completion: '', week_marks: {} };
   const nt = weekTimeOf(normalItem, wkS, wkE, spanS, spanE);
   ok('本周新建无工时工单仍用建单日', Boolean(nt) && nt.d1 === '2026-11-09', nt ? nt.time : '(未产出)');
-  const laterItem = { created: '2026-11-09', work_dates: ['2026-11-10'],
-    earliest_work_date: '2026-11-10', backfill_dates: ['2026-11-10'], settled: false };
+  const laterItem = { created: '2026-11-09', d1: '2026-11-10', d2: '2026-11-30',
+    work_dates: ['2026-11-10'], earliest_work_date: '2026-11-10', backfill_dates: ['2026-11-10'],
+    settled: false, settled_platform: false, completion: '', week_marks: {} };
   ok('工时晚于建单不算补创', backfillTimeBase(laterItem, spanS, spanE).backfilled === false, '');
   const lt = weekTimeOf(laterItem, wkS, wkE, spanS, spanE);
   ok('本周有工时的普通条目起点不受影响', Boolean(lt) && lt.d1 === '2026-11-10', lt ? lt.time : '(未产出)');
+  ok('普通未完工单同样逐周叠加', (() => {
+    const w3 = weekTimeOf(laterItem, D(16), D(22), spanS, spanE);
+    const w4 = weekTimeOf(laterItem, D(23), D(29), spanS, spanE);
+    return Boolean(w3 && w4) && w3.d1 === '2026-11-10' && w4.d1 === '2026-11-10'
+      && w3.time === '2026年11月10日-22日' && w4.time === '2026年11月10日-29日';
+  })(), '起点固定，终点 22 / 29');
 
   // builder 层：恢复识别（不再连带屏蔽任务中心）+ 工时基准字段随条目带出
   const ticket = { id: 'T1', task_id: 'K1', title: '补创工单', status: 'processing',

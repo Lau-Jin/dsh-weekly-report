@@ -9,7 +9,7 @@
  */
 import { DEFAULT_TASK_LINK } from './config.mjs';
 import {
-  fmtRange, isoDate, makeDate, pyRound, stripSchoolPrefix, splitSchool, resolveSchool, toDate, todayCn, weekEndOf,
+  fmtRange, isoDate, makeDate, pyRound, stripSchoolPrefix, splitSchool, resolveSchool, toDate, todayCn,
 } from './util.mjs';
 
 export const CATEGORY_MAP = {
@@ -143,54 +143,70 @@ export function backfillTimeBase(item, ws, we) {
 }
 
 /**
- * 某条事项在某一周周报里的时间字段（v1.3.1 抽出，供回归测试直接调用）。
+ * 某条事项在某一周周报里的时间字段（v1.3.1 抽出，v1.3.2 改为逐周叠加）。
  *
- * 口径一：补创工单（工时日早于建单日）→ 起点用工时日，终点沿用现口径
- *         （已完成取完成日，未完成拉到本周周日）。
- * 口径二：工时日不在本次生成跨度内（跨月补创）→ 返回 null 表示「识别但不生产」。
+ * 口径一（v1.3.1）：补创工单（工时日早于建单日）→ 起点用工时日，不用建单时间。
+ * 口径二（v1.3.1）：跨期补创（工时日不在生成跨度内）→ 识别但不生产。
+ * 口径三（v1.3.2）：**起点固定，未完成则每周持续叠加**——只要事项还在进行中，
+ *   每一份周报都列出它，起点不变、终点逐周推进到「本周周日」
+ *   （11月6日-8日 → 11月6日-15日 → 11月6日-22日 → …），
+ *   直到工单完成或取消；完成的那一周终点取完成日，之后不再出现。
  *
- * @param {object} it 条目（work_dates / created / settled / d2 / week_marks / settled_platform / completion）
+ * @param {object} it 条目（d1 / created / work_dates / week_marks / settled_platform / completion）
  * @param {Date} weekStart 本周起
  * @param {Date} weekEnd 本周末
- * @param {Date} spanStart 本次生成跨度起（用于判定工时是否属于本次生成周期）
+ * @param {Date} spanStart 本次生成跨度起
  * @param {Date} spanEnd 本次生成跨度止
  * @returns {{ d1: string, d2: string, time: string, settled: boolean, progress?: string }|null}
  *          null = 本周不产出该条目
  */
 export function weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd) {
-  const dates = (it.work_dates || []).map(toDate).filter(Boolean);
-  const inWeek = dates.filter((d) => d >= weekStart && d <= weekEnd);
-  const fmt = (start, end) => fmtRange(start, end);
+  if (it.cancelled) return null; // 已取消：不再出现在任何一周
 
-  if (!inWeek.length) {
-    const created = toDate(it.created);
-    if (!created || !(created >= weekStart && created <= weekEnd)) return null;
-    const bf = backfillTimeBase(it, spanStart, spanEnd);
-    if (bf.backfilled && !bf.inPeriod) return null; // 跨期补创：识别但不生产
-    const start = bf.backfilled ? bf.start : created;
-    const openEnd = weekEndOf(created) > weekEnd ? weekEnd : weekEndOf(created);
-    const end = it.settled ? (toDate(it.d2) || start) : openEnd;
-    return { d1: isoDate(start), d2: isoDate(end), time: fmt(start, end), settled: Boolean(it.settled) };
-  }
-
-  const w1 = inWeek[0];
-  const w2 = inWeek[inWeek.length - 1];
-  const marks = (it.week_marks || {})[isoDate(weekStart)] || {};
-  const comp = it.completion || '';
-  const doneByPlatform = Boolean(it.settled_platform && comp
-    && isoDate(weekStart) <= comp && comp <= isoDate(weekEnd));
-  const settled = Boolean(Boolean(marks.done) || doneByPlatform);
-  const end = settled ? w2 : (weekEndOf(w1) > weekEnd ? weekEnd : weekEndOf(w1));
-  // 补创工单：即使本周已有工时，起点仍取全量工时里最早的那天（工时日早于建单日时）
   const bf = backfillTimeBase(it, spanStart, spanEnd);
-  if (bf.backfilled && !bf.inPeriod) return null;
-  const start = bf.backfilled && bf.start < w1 ? bf.start : w1;
+  if (bf.backfilled && !bf.inPeriod) return null; // 口径二：跨期补创识别但不生产
+
+  const created = toDate(it.created);
+  const allDates = (it.work_dates || []).map(toDate).filter(Boolean);
+  const inWeek = allDates.filter((d) => d >= weekStart && d <= weekEnd);
+
+  // 起点固定：补创用工时日；否则用 builder 已算好的 d1（已收敛进生成跨度），兜底建单日
+  const start = bf.backfilled ? bf.start : (toDate(it.d1) || created || allDates[0] || null);
+  if (!start || start > weekEnd) return null; // 本周还没开始
+
+  // 按周完成判定（沿用原口径：工时备注标记 / 平台完成日落在本周）
+  const marks = (it.week_marks || {})[isoDate(weekStart)] || {};
+  const compDate = toDate(it.completion);
+  const doneByPlatform = Boolean(it.settled_platform && compDate
+    && compDate >= weekStart && compDate <= weekEnd);
+  const settled = Boolean(Boolean(marks.done) || doneByPlatform);
+
+  // 事项整体完成日：平台完成日优先，否则取「工时备注标记完成」那一周的最后一天。
+  // 注意：不能用 d2 —— 未完成事项的 d2 会被 builder 拉到周期末尾（月末/未来）。
+  let doneAt = it.settled_platform && compDate ? compDate : null;
+  if (!doneAt) {
+    for (const m of Object.values(it.week_marks || {})) {
+      if (!m || !m.done || !m.last) continue;
+      const d = toDate(m.last);
+      if (d && (!doneAt || d > doneAt)) doneAt = d;
+    }
+  }
+  // 口径三：完成周之后不再产出（直到工单完成或取消）
+  if (doneAt && doneAt < weekStart) return null;
+
+  // 终点：完成周 → 完成日；未完成 → 本周周日（逐周叠加）
+  const doneThisWeek = Boolean(doneAt && doneAt <= weekEnd);
+  let end = doneThisWeek ? doneAt : weekEnd;
+  if (end < start) end = start;
+  if (end > weekEnd) end = weekEnd;
+  const isSettled = Boolean(settled || doneThisWeek);
+
   return {
     d1: isoDate(start),
     d2: isoDate(end),
-    time: fmt(start, end),
-    settled,
-    progress: settled ? '100%' : (marks.progress ? `${Math.trunc(marks.progress)}%` : undefined),
+    time: fmtRange(start, end),
+    settled: isSettled,
+    progress: isSettled ? '100%' : (marks.progress ? `${Math.trunc(marks.progress)}%` : undefined),
   };
 }
 

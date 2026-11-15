@@ -273,7 +273,7 @@ async function main() {
   const itemsOfWeek = (weekStart, weekEnd) => {
     const out = [];
     for (const it of allItems) {
-      // 时间口径统一由 rules.mjs 的 weekTimeOf 计算（含 v1.3.1 补创工单规则），
+      // 时间口径统一由 rules.mjs 的 weekTimeOf 计算（含补创工单规则与 v1.3.2 逐周叠加），
       // 便于冒烟测试直接对生产代码做回归，避免两处逻辑漂移。
       const wt = weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd);
       if (!wt) continue;
