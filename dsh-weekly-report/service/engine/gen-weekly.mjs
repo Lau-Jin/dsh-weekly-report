@@ -71,6 +71,31 @@ function camel(name) {
   return name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
 
+/**
+ * 找同一自然周的旧「裁剪版」周报文件。
+ * 旧版本按区间裁剪（如 10/1~10/4），新的按完整自然周（9/28~10/4），
+ * 两者落在不同文件名上，不清掉会被绩效表重复计入。
+ */
+function staleWeekFiles(newPath, weekStart, weekEnd) {
+  const out = [];
+  const dir = path.dirname(newPath);
+  const base = path.basename(newPath);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return out; }
+  const re = /^周报_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.txt$/;
+  for (const name of names) {
+    if (name === base || !name.startsWith('周报_') || !name.endsWith('.txt')) continue;
+    const m = re.exec(name);
+    if (!m) continue;
+    const s = toDate(m[1]);
+    const e = toDate(m[2]);
+    if (!s || !e) continue;
+    // 旧文件的区间完全落在新周内 → 是同一周的裁剪版
+    if (s >= weekStart && e <= weekEnd) out.push(path.join(dir, name));
+  }
+  return out;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -310,6 +335,13 @@ async function main() {
 
     const missPath = `${outPath.replace(/\.txt$/i, '')}_未匹配.txt`;
     if (fs.existsSync(missPath)) fs.rmSync(missPath, { force: true });
+    // 同一自然周的旧「裁剪版」文件（例如 10/1~10/4）删掉，避免与新的完整周报重复计入绩效表
+    for (const stale of staleWeekFiles(outPath, ws, we)) {
+      try {
+        fs.rmSync(stale);
+        console.log(`已清理同周的旧版周报：${path.basename(stale)}`);
+      } catch { /* 删不掉就算了 */ }
+    }
 
     for (const key of new Set([`${ws.getFullYear()}-${ws.getMonth() + 1}`, `${we.getFullYear()}-${we.getMonth() + 1}`])) {
       const [y, m] = key.split('-').map(Number);
@@ -376,7 +408,48 @@ function listMonthsWithReports(outDir) {
           if (!have.has(k)) mItems.push(it);
         }
       }
+      // 只收「时间与该月有交集」的记录：
+      //   · 跨月的自然周，两边各取自己那段（9/28~10/4 的记录进 10 月，10/26~11/1 的进 11 月）
+      //   · 未完成的工单会逐周叠加，时间一直延到本周日 → 自然会落到后续月份的表里，
+      //     等它完成时再由核对矫正，两边数据对齐
+      const inThisMonth = (it) => {
+        const d1 = toDate(it.d1);
+        const d2 = toDate(it.d2) || d1;
+        if (!d1) return false;
+        return d1 <= me && d2 >= ms;
+      };
+      const monthItems = mItems.filter(inThisMonth);
+      console.log(`绩效表 ${y}年${m}月：${mItems.length} 条周报记录里，${monthItems.length} 条时间落在本月`);
       const monthEndWeek = segs.some((seg) => seg.we >= new Date(me.getFullYear(), me.getMonth(), me.getDate() - 6));
+
+      // 月底最终核对（不等最后一份周报）：
+      //   自然周是完整周一~周日，月末最后几天（如 11/30 周一）所属的那一周要到下个月初才出周报，
+      //   只靠周报的话月底的表会缺这几天。这里在覆盖到月末时**直接按整月拉平台数据**补齐，
+      //   保证月底的表当天就能核全；跨月周之后再生成时，它与本月的交集也会再合并一次。
+      let writeItems = monthItems;
+      let plat = allItems.filter(inThisMonth);
+      if (monthEndWeek) {
+        try {
+          const monthPlat = await collectItems({
+            token, mcpUrl, handler, ws: ms, we: me,
+            mcpTool: args.mcpTool, mcpArgs: dataArgs, withTasks: !args.noTasks, useCache: !args.noCache,
+          });
+          const platIn = monthPlat.filter(inThisMonth);
+          const have = new Set(writeItems.map((i) => `${i.school}\u0000${i.subject}`));
+          let add = 0;
+          for (const it of platIn) {
+            const k = `${it.school}\u0000${it.subject}`;
+            if (have.has(k)) continue;
+            have.add(k);
+            writeItems.push(it);
+            add += 1;
+          }
+          plat = platIn;
+          console.log(`（${y}年${m}月月底最终核对：平台整月 ${monthPlat.length} 条，其中 ${platIn.length} 条时间落在本月，本表新增 ${add} 条）`);
+        } catch (e) {
+          console.log(`提示：${y}年${m}月平台整月数据拉取失败（${e.message || e}），本次按周报内容核对`);
+        }
+      }
 
       let tpl = args.perfTemplate || cfg.perf_template || '';
       if (!tpl) tpl = fs.existsSync(perfOut) ? perfOut : (await perfLib()).autoPickXlsx(folder, ms);
@@ -386,7 +459,7 @@ function listMonthsWithReports(outDir) {
         continue;
       }
       const built = await (await perfLib()).buildPerfXlsx({
-        templatePath: tpl, outPath: perfOut, items: mItems, year: y, month: m, handler,
+        templatePath: tpl, outPath: perfOut, items: writeItems, year: y, month: m, handler,
         // 默认允许自动扩展行（明细区写满时往下插行，不丢条目）；设置里可关
       allowInsert: args.perfAllowInsert === 'false' ? false : cfg.perf_allow_insert !== false,
         dryRun: Boolean(args.perfPreview),
@@ -400,10 +473,6 @@ function listMonthsWithReports(outDir) {
         backup: typeof built === 'string' ? undefined : built.backup,
       });
 
-      const plat = allItems.filter((it) => {
-        const d = toDate(it.d1);
-        return d && d >= ms && d <= me;
-      });
       const runItems = segs.flatMap((seg) => seg.items);
       if (!args.perfPreview) {
         await (await perfLib()).perfCheckReport({

@@ -318,7 +318,7 @@ function collectState() {
 /** 在绩效目录里挑一张「最像本月」的表：先按 年月 匹配，再退到最新的 xlsx */
 function pickPerfFile(folder) {
   const now = new Date();
-  const tag = `${now.getFullYear()}年${now.getMonth() + 1}月`;
+  const tag = `${now.getFullYear()}年${String(now.getMonth() + 1).padStart(2, '0')}月`;
   const found = [];
   const walk = (dir, depth) => {
     if (depth > 2) return;
@@ -577,6 +577,9 @@ const server = http.createServer(async (req, res) => {
       const args = [P.ENGINE, '--config', P.CONFIG, '--perf-check'];
       if (month) args.push('--perf-month', month);
       if (body.fix) args.push('--perf-fix');
+      // 月底复核带上平台整月数据：最后一份周报（跨月周）要到下个月初才出，
+      // 只对周报的话月末那几天会缺；带平台数据才能核全（v1.4.0）
+      if (body.platform !== false) args.push('--perf-platform');
       const child = spawn(engineNode(), args, {
         cwd: P.ENGINE_DIR, windowsHide: true,
         env: { ...process.env, WEEKLY_DATA_DIR: P.DATA_DIR },

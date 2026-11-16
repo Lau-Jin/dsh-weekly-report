@@ -578,6 +578,51 @@ try {
     fs.rmSync(backfillTmp, { recursive: true, force: true });
   }
 
+  // 自然周切分：周一~周日、不裁剪（9/28~10/4 是一整周）
+  {
+    const { weeksInRange } = await import('./service/engine/lib/period.mjs');
+    const d = (y, mo, da) => new Date(y, mo - 1, da);
+    const fmt = (w) => w.map((x) => `${x[0].getMonth() + 1}/${x[0].getDate()}~${x[1].getMonth() + 1}/${x[1].getDate()}`);
+    ok('区间按完整自然周切分（不裁剪到区间边界）',
+      JSON.stringify(fmt(weeksInRange(d(2026, 9, 28), d(2026, 10, 4)))) === JSON.stringify(['9/28~10/4']),
+      JSON.stringify(fmt(weeksInRange(d(2026, 9, 28), d(2026, 10, 4)))));
+    const oct = fmt(weeksInRange(d(2026, 10, 1), d(2026, 10, 31)));
+    ok('10 月 = 5 个自然周（首尾跨月也算整周）',
+      oct.length === 5 && oct[0] === '9/28~10/4' && oct[4] === '10/26~11/1', JSON.stringify(oct));
+    const everyWeek = weeksInRange(d(2026, 9, 28), d(2026, 10, 31)).every((w) => {
+      const mon = (w[0].getDay() + 6) % 7 === 0;
+      const sun = w[1].getDay() === 0;
+      const len = Math.round((w[1] - w[0]) / 86400000) + 1;
+      return mon && sun && len === 7;
+    });
+    ok('每份都是完整 7 天的周一~周日', everyWeek, '');
+  }
+
+  // 绩效表文件名：月份补零（与既有表一致，不另建一份）
+  {
+    const p1 = perf.perfPathFor('D:\\绩效表', '张三', 2026, 9);
+    const p2 = perf.perfPathFor('D:\\绩效表', '张三', 2026, 11);
+    ok('绩效表文件名月份补零（2026年09月，不另建一份）',
+      /2026年09月/.test(p1) && !/2026年9月/.test(p1), path.basename(p1));
+    ok('两位数月份文件名不变', /2026年11月/.test(p2), path.basename(p2));
+  }
+
+  // 周报归属月：按「周与该月有交集」（跨月的周两边都算）
+  {
+    const bfTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-week-'));
+    const monA = path.join(bfTmp, '2026年09月');
+    const monB = path.join(bfTmp, '2026年10月');
+    fs.mkdirSync(monA, { recursive: true });
+    fs.mkdirSync(monB, { recursive: true });
+    fs.writeFileSync(path.join(monA, '周报_2026-09-28_2026-10-04.txt'), 'x', 'utf8');
+    fs.writeFileSync(path.join(monB, '周报_2026-10-05_2026-10-11.txt'), 'x', 'utf8');
+    const sep = perf.weeklyReportsForMonth(bfTmp, 2026, 9);
+    const oct = perf.weeklyReportsForMonth(bfTmp, 2026, 10);
+    ok('跨月的周（9/28~10/4）同时属于 9 月与 10 月',
+      sep.length === 1 && oct.length === 2, `9月 ${sep.length} 篇 / 10月 ${oct.length} 篇`);
+    fs.rmSync(bfTmp, { recursive: true, force: true });
+  }
+
   // 面板：来回切插件页面后要停在原来那一页（别自己跳回概览）
   ok('面板记住当前视图（localStorage）',
     /localStorage\.setItem\('ws-view'/.test(jsText) && /localStorage\.getItem\('ws-view'/.test(jsText),

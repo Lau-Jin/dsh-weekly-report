@@ -13,18 +13,24 @@ export function currentWeek(today = todayCn()) {
 }
 
 /** [start, end] 拆成若干自然周（周一~周日），每段裁剪到区间内 */
+/**
+ * 把区间拆成**完整的自然周**（周一 ~ 周日），不裁剪到区间边界。
+ *
+ * 例：区间 10/1 ~ 10/31 → 9/28~10/4、10/5~10/11、10/12~10/18、10/19~10/25、10/26~11/1
+ * （跨月的周照样按完整周一~周日生成，属于哪个月由「周与该月有交集」判断）
+ */
 export function weeksInRange(start, end) {
   let s = start;
   let e = end;
   if (e < s) [s, e] = [e, s];
   const out = [];
-  let cur = s;
-  while (cur <= e) {
-    const offset = (cur.getDay() + 6) % 7;
-    const monday = addDays(cur, -offset);
-    const sunday = addDays(monday, 6);
-    out.push([monday < s ? s : monday, sunday > e ? e : sunday]);
-    cur = addDays(sunday, 1);
+  const offset = (s.getDay() + 6) % 7;          // 周一=0
+  let cur = addDays(s, -offset);                // 区间首日所在周的周一
+  const lastOffset = (e.getDay() + 6) % 7;
+  const last = addDays(e, 6 - lastOffset);      // 区间末日所在周的周日
+  while (cur <= last) {
+    out.push([cur, addDays(cur, 6)]);
+    cur = addDays(cur, 7);
   }
   return out;
 }

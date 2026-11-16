@@ -96,7 +96,9 @@ function readKeyFile(p) {
 
 /** 按周期归档：<outDir>\2026年11月\周报_2026-11-10_2026-11-16.txt */
 export function defaultOutPath(outDir, weekStart, weekEnd) {
-  const month = `${weekStart.getFullYear()}年${String(weekStart.getMonth() + 1).padStart(2, '0')}月`;
+  // 归档到「周日所在月」：自然周可能跨月（如 10/26~11/1 归 11 月），与「该周属于哪个月」保持一致
+  const d = weekEnd || weekStart;
+  const month = `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月`;
   return path.join(outDir, month, `周报_${isoDate(weekStart)}_${isoDate(weekEnd)}.txt`);
 }
 

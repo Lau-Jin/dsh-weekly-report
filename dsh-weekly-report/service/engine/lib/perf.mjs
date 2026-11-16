@@ -96,7 +96,9 @@ export function perfPathFor(folder, handler, year, month) {
   let root = path.normalize(String(folder || ''));
   if (root.length > 3) root = root.replace(/[\\/]+$/, '');
   if (/^\d{4}$/.test(path.basename(root))) root = path.dirname(root);
-  return path.join(root, String(year), `${year}年${month}月${handler}${PERF_FILE_SUFFIX}`);
+  // 月份补零：与既有表命名一致（2026年09月），否则单数月会另建一份表、原表不被更新
+  const mm = String(month).padStart(2, '0');
+  return path.join(root, String(year), `${year}年${mm}月${handler}${PERF_FILE_SUFFIX}`);
 }
 
 /** Python 的 str(cell.value or "") / str(v)（None 显示成 None 的地方用 rawText） */
@@ -858,9 +860,14 @@ export function weeklyReportsForMonth(outDir, year, month) {
       if (!name.startsWith('周报_') || !name.endsWith('.txt')) continue;
       const m = WEEK_FILE_RE.exec(name);
       if (!m) continue;
+      const start = toDate(m[1]);
       const end = toDate(m[2]);
-      if (!end) continue;
-      if (end.getFullYear() === Number(year) && end.getMonth() + 1 === Number(month)) {
+      if (!start || !end) continue;
+      // 归属判断：**这一周与该月有交集**就属于该月
+      // （自然周可能跨月：9/28~10/4 同时属于 9 月与 10 月）
+      const ms = new Date(Number(year), Number(month) - 1, 1);
+      const me = new Date(Number(year), Number(month), 0, 23, 59, 59, 999);
+      if (start <= me && end >= ms) {
         out.push(path.join(folder, name));
       }
     }
@@ -1184,24 +1191,53 @@ export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER
   mark(!broken.length, '合并单元格齐全（B:C / D:I / M:N）',
     `合并单元格缺失：${broken.slice(0, 8).join('、')}`);
 
+  // 字体 / 日期格式：以**表内主流样式**为基准（不写死 微软雅黑 10 —— 换模板就全表报错），
+  // 只是提示不算错：往月遗留的行样式本来就可能和新写的行不一样。
   const fontsBad = [];
   const fmtBad = [];
+  const fontSeen = new Map();
+  const fmtSeen = new Map();
+  const fontKey = (f) => `${(f && f.name) || ''}|${(f && f.size) || 0}`;
   for (let i = 0; i < table.length; i += 1) {
     const r = start + i;
     const row = ws.getRow(r);
     for (const c of [PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL, PERF_END_COL, PERF_DONE_COL]) {
-      const font = row.getCell(c).font || {};
-      if ((font.name || '') !== '微软雅黑' || (font.size || 0) !== 10) {
+      const k = fontKey(row.getCell(c).font || {});
+      fontSeen.set(k, (fontSeen.get(k) || 0) + 1);
+    }
+    for (const c of [PERF_START_COL, PERF_END_COL]) {
+      const nf = row.getCell(c).numFmt || '';
+      fmtSeen.set(nf, (fmtSeen.get(nf) || 0) + 1);
+    }
+  }
+  const mainFont = [...fontSeen.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  const mainFmt = [...fmtSeen.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  for (let i = 0; i < table.length; i += 1) {
+    const r = start + i;
+    const row = ws.getRow(r);
+    for (const c of [PERF_CAT_COL, PERF_CONTENT_COL, PERF_START_COL, PERF_END_COL, PERF_DONE_COL]) {
+      if (fontKey(row.getCell(c).font || {}) !== mainFont) {
         fontsBad.push(`${String.fromCharCode(64 + c)}${r}`);
       }
     }
     for (const c of [PERF_START_COL, PERF_END_COL]) {
-      const nf = row.getCell(c).numFmt || '';
-      if (!nf.includes('y')) fmtBad.push(`${String.fromCharCode(64 + c)}${r}`);
+      if ((row.getCell(c).numFmt || '') !== mainFmt) {
+        fmtBad.push(`${String.fromCharCode(64 + c)}${r}`);
+      }
     }
   }
-  mark(!fontsBad.length, '字体统一（微软雅黑 10 号）', `字体不一致：${fontsBad.slice(0, 8).join('、')}`);
-  mark(!fmtBad.length, '日期格式 yyyy/m/d', `日期格式不对：${fmtBad.slice(0, 8).join('、')}`);
+  if (fontsBad.length) {
+    tips.push(`字体不统一：${fontsBad.length} 处（表内以「${mainFont.split('|')[0] || '默认'} ${mainFont.split('|')[1] || ''}」为主，多为往月遗留，未改动）`);
+    fmtLines.push(`  · 字体不统一：${fontsBad.length} 处（以「${mainFont.split('|')[0] || '默认'}」为主，多为往月遗留，未改动）`);
+  } else {
+    fmtLines.push('  ✓ 字体统一（按本表主流样式）');
+  }
+  if (fmtBad.length) {
+    tips.push(`日期格式不统一：${fmtBad.length} 处（表内以「${mainFmt || '默认'}」为准）`);
+    fmtLines.push(`  · 日期格式不统一：${fmtBad.length} 处（以「${mainFmt || '默认'}」为准）`);
+  } else {
+    fmtLines.push('  ✓ 日期格式统一（按本表主流格式）');
+  }
 
   const secVal = ws.getCell(secRow, PERF_CAT_COL).value;
   mark(typeof secVal === 'string' && secVal.includes('工作任务考核'),
