@@ -318,6 +318,22 @@ async function main() {
     }
   }
 
+/** 扫周报输出目录：列出「有周报文件的月份」（YYYY年MM月 目录 + 周报_*.txt） */
+function listMonthsWithReports(outDir) {
+  const out = [];
+  if (!outDir || !fs.existsSync(outDir)) return out;
+  let names = [];
+  try { names = fs.readdirSync(outDir); } catch { return out; }
+  for (const name of names) {
+    const m = /^(\d{4})年(\d{1,2})月$/.exec(name);
+    if (!m) continue;
+    let files = [];
+    try { files = fs.readdirSync(path.join(outDir, name)).filter((f) => /^周报_.*\.txt$/.test(f)); } catch { continue; }
+    if (files.length) out.push({ y: Number(m[1]), m: Number(m[2]), count: files.length });
+  }
+  return out.sort((a, b) => a.y - b.y || a.m - b.m);
+}
+
   // ---- 绩效表：每个月一份，把该月各周内容并进去 ----
   if (args.perfXlsx || args.perfAuto) {
     const monthKeys = [...perfMonths.keys()].sort((a, b) => {
@@ -418,6 +434,42 @@ async function main() {
           }
         } catch (nextErr) {
           console.log(`提示：下个月绩效表未能预建（${nextErr.message || nextErr}），不影响本月结果`);
+        }
+      }
+    }
+
+    // 补齐缺失的历史绩效表：只要某个月有周报、目录里却没有对应的绩效表，就按周报内容建一张
+    // （直接读周报文件推导条目，不调接口；模板取目录里最新的那张）
+    if (args.perfAuto && !args.perfXlsx) {
+      const perfLibMod = await perfLib();
+      const nowM = todayCn();
+      for (const { y, m, count } of listMonthsWithReports(outDir)) {
+        if (y > nowM.getFullYear() || (y === nowM.getFullYear() && m > nowM.getMonth() + 1)) continue;
+        const out = perfLibMod.perfPathFor(folder, handler, y, m);
+        if (fs.existsSync(out)) continue;
+        const collected = perfLibMod.collectWeekItems(outDir, y, m, console.log);
+        if (!collected.items.length) continue;
+        const tpl = perfLibMod.autoPickXlsx(folder, new Date(y, m - 1, 1), console.log);
+        if (!tpl) {
+          console.log(`提示：绩效表目录里没有可用模板，跳过补建 ${y}年${m}月（放一张月度考核表即可）`);
+          continue;
+        }
+        try {
+          const built = await perfLibMod.buildPerfXlsx({
+            templatePath: tpl, outPath: out, items: collected.items,
+            year: y, month: m, handler, allowInsert: true, log: console.log,
+          });
+          const builtPath = typeof built === 'string' ? built : built.path;
+          artifacts.perf.push({
+            path: builtPath, name: path.basename(builtPath), year: y, month: m,
+            count: collected.items.length, added: 0, changes: 0, structure: [], backup: '',
+          });
+          console.log(`提示：已补建 ${y}年${m}月绩效表（${collected.items.length} 条，来自 ${count} 份周报）：${builtPath}`);
+          await perfLibMod.perfCheckReport({
+            path: builtPath, year: y, month: m, handler, fix: true, outDir, allowInsert: true,
+          });
+        } catch (e) {
+          console.log(`提示：${y}年${m}月绩效表补建失败（${e.message || e}），不影响本次生成`);
         }
       }
     }

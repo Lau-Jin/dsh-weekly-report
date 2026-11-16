@@ -516,6 +516,68 @@ try {
       !mr.structural || mr.structural.length === 0, JSON.stringify((mr.structural || []).slice(0, 3)));
   }
 
+  // 缺失的绩效表要能按周报补建，且**不会重复建表**
+  {
+    const backfillTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-bf-'));
+    const outDirBf = path.join(backfillTmp, '周报');
+    const perfDirBf = path.join(backfillTmp, '绩效表');
+    fs.mkdirSync(path.join(outDirBf, '2026年09月'), { recursive: true });
+    fs.mkdirSync(perfDirBf, { recursive: true });
+    const wk = '【项目运维】\n示例学院\n  时间: 2026年9月1日-9月3日\n  事项: 第一件事\n  工作内容：http://x\n  重要说明：无\n  进度：100%\n';
+    fs.writeFileSync(path.join(outDirBf, '2026年09月', '周报_2026-09-01_2026-09-06.txt'), wk, 'utf8');
+    fs.writeFileSync(path.join(outDirBf, '2026年09月', '周报_2026-09-07_2026-09-13.txt'), wk.replace('第一件事', '第二件事'), 'utf8');
+
+    // 一张结构完整的空考核表当模板
+    const wbB = new ExcelJS.Workbook();
+    const wsB = wbB.addWorksheet('月度考核');
+    wsB.getCell('B2').value = '测试员工月度考核表'; wsB.mergeCells('B2:N2');
+    wsB.getCell('B3').value = '被考评人'; wsB.mergeCells('B3:C3'); wsB.getCell('D3').value = '测试';
+    wsB.getCell('B4').value = '考评时间'; wsB.mergeCells('B4:C4'); wsB.getCell('D4').value = '2026年9月1日-9月30日';
+    wsB.getCell('J3').value = '填报时间'; wsB.getCell('K3').value = new Date(2026, 8, 1);
+    for (const [c, v] of Object.entries({ B: '类别', D: '任务名称', J: '开始时间', K: '结束时间', L: '是否完成', M: '评定' })) wsB.getCell(`${c}6`).value = v;
+    wsB.mergeCells('D6:I6'); wsB.mergeCells('M6:N6');
+    const FB = { name: '微软雅黑', size: 10 };
+    for (let r = 7; r <= 14; r += 1) {
+      wsB.mergeCells(`B${r}:C${r}`); wsB.mergeCells(`D${r}:I${r}`); wsB.mergeCells(`M${r}:N${r}`);
+      for (const c of ['B', 'D', 'J', 'K', 'L']) wsB.getCell(`${c}${r}`).font = { ...FB };
+    }
+    wsB.getCell('B16').value = '工作任务考核（60%）：'; wsB.mergeCells('B16:N16');
+    wsB.getCell('B22').value = '工作绩效考核（30%）：'; wsB.mergeCells('B22:N22');
+    wsB.getCell('B29').value = '品质与态度考核（10%）：'; wsB.mergeCells('B29:N29');
+    const tplBf = path.join(perfDirBf, '模板.xlsx');
+    await wbB.xlsx.writeFile(tplBf);
+
+    const months = [];
+    for (const name of fs.readdirSync(outDirBf)) {
+      const mm = /^(\d{4})年(\d{1,2})月$/.exec(name);
+      if (!mm) continue;
+      const files = fs.readdirSync(path.join(outDirBf, name)).filter((f) => /^周报_.*\.txt$/.test(f));
+      if (files.length) months.push({ y: Number(mm[1]), m: Number(mm[2]), count: files.length });
+    }
+    ok('扫到「有周报的月份」', months.length === 1 && months[0].y === 2026 && months[0].m === 9,
+      JSON.stringify(months));
+
+    const handlerBf = '测试';
+    let builtPath = '';
+    for (const { y, m } of months) {
+      const out = perf.perfPathFor(perfDirBf, handlerBf, y, m);
+      if (fs.existsSync(out)) continue;
+      const collected = perf.collectWeekItems(outDirBf, y, m, () => {});
+      const tplFile = perf.autoPickXlsx(perfDirBf, new Date(y, m - 1, 1), () => {});
+      const built = await perf.buildPerfXlsx({
+        templatePath: tplFile, outPath: out, items: collected.items,
+        year: y, month: m, handler: handlerBf, allowInsert: true, log: () => {},
+      });
+      builtPath = typeof built === 'string' ? built : built.path;
+      ok('缺表时按周报补建', collected.items.length === 2 && fs.existsSync(builtPath),
+        `条目 ${collected.items.length} / 文件 ${fs.existsSync(builtPath)}`);
+    }
+    const again = months.map(({ y, m }) => fs.existsSync(perf.perfPathFor(perfDirBf, handlerBf, y, m)));
+    ok('二次检查不会重复建表', again.every(Boolean) && fs.readdirSync(path.join(perfDirBf, '2026')).length === 1,
+      `2026 目录文件数 ${fs.readdirSync(path.join(perfDirBf, '2026')).length}`);
+    fs.rmSync(backfillTmp, { recursive: true, force: true });
+  }
+
   // 面板：来回切插件页面后要停在原来那一页（别自己跳回概览）
   ok('面板记住当前视图（localStorage）',
     /localStorage\.setItem\('ws-view'/.test(jsText) && /localStorage\.getItem\('ws-view'/.test(jsText),

@@ -472,10 +472,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    if ((method === 'GET' || method === 'HEAD') && (p === '/api/ping' || p === '/api/health')) {
+    if ((method === 'GET' || method === 'HEAD') && p === '/api/ping') {
       return json(res, 200, { ok: true, version: VERSION, pid: process.pid, startedAt: new Date(STARTED).toISOString(), uptimeMs: Date.now() - STARTED, busy: run.running });
     }
-    if (method === 'GET' && (p === '/api/state' || p === '/api/status')) return json(res, 200, collectState());
+    if (method === 'GET' && p === '/api/state') return json(res, 200, collectState());
 
     if (method === 'POST' && p === '/api/config') {
       const body = await readBody(req);
