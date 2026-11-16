@@ -1,6 +1,6 @@
 {
   "name": "dsh-weekly-report",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "displayName": {
     "zh": "周报工作台",
     "en": "Weekly Report Studio"
@@ -26,27 +26,8 @@
     "autoKeepAliveMs": 20000,
     "port": 8798,
     "requiresRestart": false,
-    "perfComponent": "exceljs 声明为 dependencies + bundledDependencies，随 npm 包自带，安装/更新都会带上（不依赖联网补装）；万一缺失仍可在设置页一键补装",
-    "hostBootstrap": "作为 npm 包安装后，Host 半身自动自举数据目录、面板服务与绩效表组件，并由宿主心跳每 20s 保活",
-    "verified": {
-      "smoke": "117/117",
-      "hostRevive": "12s 内拉起 v1.3.6",
-      "installDeps": "ok / mode=bundled",
-      "reportRepair": "1 处补全，其余 5 份历史文件未重写",
-      "perfWrite": "就地写入 2 个单元格，结构指纹前后一致"
-    },
-    "reportIntegrity": {
-      "emptySchoolFix": "rules.mjs resolveSchool 多级兜底 + render.mjs 字段单行化，杜绝块内空行切断记录",
-      "repairTool": "service/engine/repair-report.mjs（npm run repair / 历史页「检查格式」）",
-      "openDir": "WINDIR 绝对路径 explorer.exe，/select 选中文件，错误不再被吞，前端 toast 反馈"
-    },
-    "version": "1.3.6",
-    "versionRule": {
-      "minor": "最后一位",
-      "feature": "第二位",
-      "major": "第一位",
-      "source": "package.json（服务与面板都读它，不再写死）"
-    }
+    "perfComponent": "exceljs 声明为 dependencies + bundledDependencies，随 npm 包自带，安装与更新都会带上，开箱可用；万一缺失仍可在设置页一键补装",
+    "hostBootstrap": "安装后由宿主心跳每 20s 自动自举数据目录、面板服务与绩效表组件，挂了静默拉起"
   },
   "configuration": {
     "providedByUser": [
@@ -66,7 +47,7 @@
   "dataSource": {
     "runtime": "tickets-via-mcp",
     "sessionData": "design-reference-only",
-    "note": "DSH 会话数据仅用于确定周报字段格式、绩效表规则与 UI 偏好，运行时不读取会话内容。"
+    "note": "DSH 会话数据仅用于确定周报字段格式、绩效表规则与界面偏好，运行时不读取会话内容。"
   },
   "reportFormat": {
     "template": "service/engine/templates/周报模板.txt",
@@ -80,49 +61,16 @@
       "progress"
     ],
     "scheduleHint": "每周六 12:00",
-    "scheduledRun": {
-      "enabled": "默认关闭，设置页开启",
-      "default": "周六 12:00 + 同步绩效表",
-      "engine": "服务内置调度器（setInterval 20s tick + 分钟槽持久化去重），无需外部计划任务",
-      "ui": "设置页「定时生成」卡片配置；面板左下角实时展示定时安排与下次运行时间"
-    },
     "timeRule": "已完成=开始~完成；未完成=开始~本周周日；任何一条结束时间不越过本周周日"
   },
-    "schedule": "每周(周几 + 时:分)自动生成本周周报，默认周六 12:00、默认关闭；由服务内置调度器触发（每 20s 检查、分钟槽持久化去重），不依赖系统计划任务；到点触发复用手动生成的全部校验与日志",
   "performanceRules": {
     "content": "本月全部周报内容填入绩效表，时间一致",
     "keepFormat": true,
     "onEveryRun": true,
     "monthEndCheck": true,
-    "layoutDetection": "service/engine/lib/perf-map.mjs：按表头文字定位列、按「工作任务考核」定位可写行、按标签定位被考评人/考评时间/填报时间",
-    "writePolicy": "只写目标格子；值相同跳过；不清空整块、不覆盖字体、不强行改日期格式；行数不足默认不插行",
-    "backup": "写前复制到同目录 .perf-backup/，保留最近 8 份",
     "templateSelectable": true,
-    "structureGuard": "写前写后结构指纹对比（行列数/合并区/考核区块），有变化如实报告"
-  },
-  "ui": {
-    "theme": "light",
-    "style": "简洁卡片、单一强调色、克制留白",
-    "views": [
-      "overview",
-      "generate",
-      "settings",
-      "history"
-    ],
-    "collapsibleBlocks": [
-      "运行日志",
-      "生成结果全文",
-      "历史周报全文",
-      "组件/复核输出",
-      "周报格式预览"
-    ],
-    "layout": "100dvh 三段式；主内容区自滚；日志/预览/弹窗用 clamp()+dvh 按视口自适应；矮屏与窄屏分别适配",
-    "history": "列表按视口高度内部滚动查找周报文件，搜索框吸顶并显示总数；全文独立滚动且可收起"
-  },
-  "distribution": {
-    "fullPackage": "保留 node_modules/（exceljs 及依赖），绩效表功能完全离线可用",
-    "slimPackage": "删除 node_modules/ 时由设置页自动补装，核心周报 txt 仍零依赖",
-    "noBundledCredentials": true
+    "layoutDetection": "按表头文字定位列、按「工作任务考核」定位可写行、按标签定位被考评人/考评时间/填报时间",
+    "writePolicy": "只写目标格子，值相同跳过；不清空整块、不覆盖字体、不改日期格式；行数不足默认不插行"
   },
   "requirements": {
     "node": ">=20",
@@ -131,7 +79,7 @@
       "darwin",
       "linux"
     ],
-    "optional": "exceljs@4.4.0（仅绩效表 xlsx 写入需要；纯周报 txt 零依赖）"
+    "optional": "exceljs@4.4.0（随包自带，仅绩效表 xlsx 写入需要；纯周报 txt 零依赖）"
   },
   "safety": {
     "listen": "127.0.0.1 only",
