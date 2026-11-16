@@ -894,11 +894,12 @@ function stampNow() {
 /**
  * 核对绩效表：内容（对照本月周报）/ 时间 / 完成标记 / 格式（对应 check_perf_xlsx）。
  * 返回 { ok, text }；fix=true 时先补齐/校正再出报告。
+ * allowInsert=true 时明细区写满会下移考核区块插行（与 buildPerfXlsx 同一套，受 perf_allow_insert 控制）。
  */
 export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER, opts = {}) {
   const {
     weekItems = null, weekFiles = null, platformItems = null,
-    fix = false, platformFix = false, log = console.log,
+    fix = false, platformFix = false, allowInsert = false, log = console.log,
   } = opts || {};
 
   const tag = perfMonthText(year, month);
@@ -930,7 +931,22 @@ export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER
     const updated = [...after.keys()].filter((k) => before.has(k) && !rowEquals(after.get(k), before.get(k)))
       .map((k) => after.get(k));
     if (added.length || updated.length) {
-      writeTaskRows(ws, merged, start, lay);
+      // 明细区写满时：勾了「允许自动扩展行」就下移考核区块插行（与 buildPerfXlsx 同一套逻辑）；
+      // 没勾就保持原样，靠下面的"实际落盘"检查把没写进去的条目如实报出来（以前是直接丢掉还谎称补齐）。
+      let inserted = 0;
+      if (merged.length > lay.cap && allowInsert) {
+        inserted = merged.length - lay.cap;
+        insertRowsAt(ws, lay.secRow, inserted);
+        lay = detectPerfLayout(ws);
+        start = lay.firstRow;
+        cap = lay.cap;
+        secRow = lay.secRow;
+      }
+      const written = writeTaskRows(ws, merged, start, lay);
+      if (written.overflow && !inserted) {
+        fixLines.push(`提示：明细区只有 ${cap} 行，本月共 ${merged.length} 条，`
+          + `超出的 ${written.overflow} 条本次未写入（未自动插行；可在设置里勾选「允许自动扩展行」后重跑）`);
+      }
       fixScoreFormulas(ws);
       let target = file;
       try {
@@ -958,9 +974,22 @@ export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER
         cap = lay.cap;
         secRow = lay.secRow;
         rawRows = readPerfRows(ws, start, cap, lay);
-        if (added.length) {
-          const more = added.length > 10 ? '…' : '';
-          fixLines.push(`自动补齐 ${added.length} 条：${added.slice(0, 10).map(perfRowLine).join('；')}${more}`);
+        // 以「实际落盘」为准汇报：行满被丢掉的条目不能算补齐（以前这里直接报 added.length）
+        const landed = new Set(rawRows.map((r) => perfKey(r.content)));
+        const doneAdded = added.filter((r) => landed.has(perfKey(r.content)));
+        const dropped = added.filter((r) => !landed.has(perfKey(r.content)));
+        if (doneAdded.length) {
+          const more = doneAdded.length > 10 ? '…' : '';
+          fixLines.push(`自动补齐 ${doneAdded.length} 条：${doneAdded.slice(0, 10).map(perfRowLine).join('；')}${more}`);
+        }
+        if (dropped.length) {
+          const more = dropped.length > 10 ? '…' : '';
+          fixLines.push(`⚠ 还有 ${dropped.length} 条没写进去（明细区 ${cap} 行已写满）：`
+            + `${dropped.slice(0, 10).map(perfRowLine).join('；')}${more}`
+            + '；可在设置里勾选「允许自动扩展行」后重跑核对，会下移考核区块插行');
+        }
+        if (inserted) {
+          fixLines.push(`明细区已自动下移考核区块 ${inserted} 行（表格结构变化已记录）`);
         }
         if (updated.length) {
           const more = updated.length > 10 ? '…' : '';
@@ -1154,6 +1183,7 @@ export async function perfCheckReport(opts) {
   const {
     path: perfPath, year, month, handler = DEFAULT_HANDLER, platformItems = null,
     fix = false, saveReport = true, extraItems = null, platformFix = false,
+    allowInsert = false,
     outDir = process.env.WEEKLY_OUT_DIR || '', log = console.log,
   } = opts || {};
 
@@ -1162,7 +1192,7 @@ export async function perfCheckReport(opts) {
   const weekFiles = collected.files;
   if (extraItems && extraItems.length) weekItems = [...weekItems, ...extraItems];
   const { ok, text } = await checkPerfXlsx(perfPath, year, month, handler, {
-    weekItems, weekFiles, platformItems, fix, platformFix, log,
+    weekItems, weekFiles, platformItems, fix, platformFix, allowInsert, log,
   });
   log('');
   log(text);

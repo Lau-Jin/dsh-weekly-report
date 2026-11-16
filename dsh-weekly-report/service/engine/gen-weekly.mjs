@@ -174,7 +174,10 @@ async function main() {
         withTasks: !args.noTasks,
       });
     }
-    const result = await (await perfLib()).perfCheckReport({ path: checkPath, year: y, month: m, handler, platformItems, fix: Boolean(args.perfFix), outDir });
+    const result = await (await perfLib()).perfCheckReport({
+      path: checkPath, year: y, month: m, handler, platformItems,
+      fix: Boolean(args.perfFix), allowInsert: Boolean(args.perfAllowInsert || cfg.perf_allow_insert), outDir,
+    });
     return result.ok ? 0 : 2;
   }
 
@@ -389,6 +392,7 @@ async function main() {
         await (await perfLib()).perfCheckReport({
           path: builtPath, year: y, month: m, handler,
           fix: true, platformItems: plat, extraItems: runItems, platformFix: monthEndWeek, outDir,
+          allowInsert: Boolean(args.perfAllowInsert || cfg.perf_allow_insert),
         });
       }
       if (monthEndWeek) {
@@ -403,7 +407,10 @@ async function main() {
       const prevOut = (await perfLib()).perfPathFor(folder, handler, py, pm);
       if (fs.existsSync(prevOut) && !fs.existsSync(prevOut.replace(/\.xlsx$/i, '') + '_核对.txt')) {
         console.log(`上个月（${py}年${pm}月）绩效表还没有核对报告，补一次核对`);
-        await (await perfLib()).perfCheckReport({ path: prevOut, year: py, month: pm, handler, fix: true, outDir });
+        await (await perfLib()).perfCheckReport({
+          path: prevOut, year: py, month: pm, handler, fix: true, outDir,
+          allowInsert: Boolean(args.perfAllowInsert || cfg.perf_allow_insert),
+        });
       }
     }
   }

@@ -176,24 +176,40 @@ try {
   {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('月度考核');
+    // 日期一律走 toExcelDate：引擎约定「墙钟时间存 UTC 字段」，
+    // 直接写本地 Date 会被 fromExcelDate 读回差 8 小时（表里 11-02 变 11-01）
+    const D = (y, m, d) => xlsx.toExcelDate(new Date(y, m, d));
     ws.getCell('B2').value = '张三员工月度考核表';
     ws.mergeCells('B2:N2');
     ws.getCell('B3').value = '被考评人'; ws.mergeCells('B3:C3'); ws.getCell('D3').value = '张三';
     ws.getCell('B4').value = '考评时间'; ws.mergeCells('B4:C4'); ws.getCell('D4').value = '2026年11月1日-11月30日';
-    ws.getCell('J3').value = '填报时间'; ws.getCell('K3').value = new Date(2026, 10, 12);
+    ws.getCell('J3').value = '填报时间'; ws.getCell('K3').value = D(2026, 10, 12);
     const heads = { B: '类别', D: '任务名称', J: '开始时间', K: '结束时间', L: '是否完成', M: '评定' };
     for (const [col, text] of Object.entries(heads)) ws.getCell(`${col}6`).value = text;
     ws.mergeCells('D6:I6'); ws.mergeCells('M6:N6');
-    for (let r = 7; r <= 9; r += 1) {
+    // 明细区（cap = 12-7 = 5 行，即 7~11）每一行都要有合并区与字体 —— 与真实模板一致，
+    // 否则核对的"合并单元格齐全 / 字体统一"会因为夹具简陋而误报
+    const FONT = { name: '微软雅黑', size: 10 };
+    for (let r = 7; r <= 11; r += 1) {
       ws.mergeCells(`B${r}:C${r}`); ws.mergeCells(`D${r}:I${r}`); ws.mergeCells(`M${r}:N${r}`);
+      for (const c of ['B', 'D', 'J', 'K', 'L']) ws.getCell(`${c}${r}`).font = { ...FONT };
+      if (r > 9) continue;                 // 10、11 是空行，只铺结构不写值
       ws.getCell(`B${r}`).value = '项目运维';
       ws.getCell(`D${r}`).value = `既有事项${r}`;
-      ws.getCell(`J${r}`).value = new Date(2026, 10, 2);
-      ws.getCell(`K${r}`).value = new Date(2026, 10, 2);
+      ws.getCell(`J${r}`).value = D(2026, 10, 2);
+      ws.getCell(`K${r}`).value = D(2026, 10, 2);
       ws.getCell(`L${r}`).value = '是';
     }
     ws.getCell('B12').value = '工作任务考核（60%）：';
     ws.mergeCells('B12:N12');
+    // 评分公式要三块齐全才会生成（见 scoreFormulas）
+    for (const [row, text] of [[18, '工作绩效考核（30%）：'], [25, '品质与态度考核（10%）：']]) {
+      ws.getCell(`B${row}`).value = text;
+      ws.mergeCells(`B${row}:N${row}`);
+    }
+    // 初始公式故意写成"过期的"（指向区块之前的行），修复后必须被校正到新区块
+    ws.getCell('K4').value = { formula: 'SUM(M10:N14)' };
+    ws.getCell('M4').value = { formula: 'SUM(M10:N14)*0.6' };
     await wb.xlsx.writeFile(fixture);
   }
   {
@@ -211,6 +227,57 @@ try {
       sigBefore.merges === sigAfter.merges && sigBefore.rowCount === sigAfter.rowCount && res.changes.length <= 3,
       `改动 ${res.changes.length} 格 / 合并区未变`);
     ok('不覆盖未涉及的其它行', String(sheet.getCell(8, 4).value).includes('既有事项8'), '');
+  }
+
+  // 明细区写满时的核对修复（回归：以前直接丢掉多出来的条目，还报"自动补齐 N 条"）
+  {
+    const mkItems = (n, offset) => Array.from({ length: n }, (_, i) => ({
+      school: '×× 学校', subject: `新增事项${i + offset}`, category: '项目运维',
+      d1: new Date(2026, 10, 3), d2: new Date(2026, 10, 3), settled: true, note: '',
+    }));
+    // 注意：文件里写的 D 列就是裸标题（无校名前缀），周报条目必须与之同 key，
+    // 否则同一条会被算成两条（合并数就对不上了）
+    const existing = [7, 8, 9].map((r) => ({
+      school: '', subject: `既有事项${r}`, category: '项目运维',
+      d1: new Date(2026, 10, 2), d2: new Date(2026, 10, 2), settled: true, note: '',
+    }));
+    // 明细区 cap = 12 - 7 = 5 行；3 条既有 + 5 条新增 = 8 条 > 5 → 溢出 3 条
+    const weekItems = [...existing, ...mkItems(5, 1)];
+
+    // ① 不允许扩行：必须如实说"没写进去"，不能谎称补齐
+    const f1 = path.join(DATA, 'smoke-perf-full-a.xlsx');
+    fs.copyFileSync(fixture, f1);
+    const r1 = await perf.checkPerfXlsx(f1, 2026, 11, '张三', { weekItems, fix: true, log: () => {} });
+    ok('行满且未勾扩行：如实报"没写进去"，不谎称补齐',
+      /没写进去/.test(r1.text) && !/自动补齐 5 条/.test(r1.text),
+      (r1.text.match(/本次顺手修补[\s\S]{0,300}/) || [''])[0].replace(/\s+/g, ' ').slice(0, 200));
+    ok('行满且未勾扩行：缺的条目仍算"缺少"（核对不通过）',
+      r1.ok === false && /缺少 3 条/.test(r1.text), '');
+
+    // ② 允许扩行：下移考核区块并真正落盘
+    const f2 = path.join(DATA, 'smoke-perf-full-b.xlsx');
+    fs.copyFileSync(fixture, f2);
+    const r2 = await perf.checkPerfXlsx(f2, 2026, 11, '张三', {
+      weekItems, fix: true, allowInsert: true, log: () => {},
+    });
+    ok('勾了扩行：核对通过', r2.ok === true, (r2.text.match(/结论：[^\n]*/) || [''])[0]);
+    ok('勾了扩行：报告写明下移了几行', /下移考核区块 3 行/.test(r2.text), '');
+    const book2 = await xlsx.readWorkbook(f2);
+    const sheet2 = perf.perfSheetOf(book2);
+    const lay2 = detectPerfLayout(sheet2);
+    ok('勾了扩行：明细区真的扩了（5 → 8 行）', lay2.cap === 8 && lay2.secRow === 15,
+      `cap=${lay2.cap} secRow=${lay2.secRow}`);
+    const landed = [10, 11, 12, 13, 14].map((r) => String(sheet2.getCell(r, 4).value || ''));
+    ok('勾了扩行：新增条目全部落盘', landed.filter((v) => v.includes('新增事项')).length === 5,
+      JSON.stringify(landed));
+    ok('勾了扩行：既有条目没被覆盖', String(sheet2.getCell(7, 4).value).includes('既有事项7'), '');
+    const k4raw = sheet2.getCell(4, 11).value;
+    const k4 = String((k4raw && (k4raw.formula || k4raw.result)) || k4raw || '');
+    const refRow = Number((k4.match(/M(\d+)/) || [0, 0])[1]);
+    ok('勾了扩行：评分公式跟着区块走', refRow >= lay2.secRow + 2,
+      `K4=${k4} / 区块行=${lay2.secRow}`);
+    fs.rmSync(f1, { force: true });
+    fs.rmSync(f2, { force: true });
   }
   ok('未完成事项结束时间取本周周日', (() => {
     const monday = new Date(2026, 10, 9); // 2026-11-09 周一
