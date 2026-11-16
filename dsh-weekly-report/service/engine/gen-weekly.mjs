@@ -190,14 +190,22 @@ async function main() {
     let platformItems = null;
     if (args.perfPlatform) {
       const tokenArg = args.mcpToken || (fs.existsSync(env.tokenFile) ? env.tokenFile : '');
-      if (!tokenArg) throw new Error('--perf-platform 需要 API Key：--mcp-token 或 yanfa_api_key.txt');
-      const [ms, me] = monthRange(y, m);
-      platformItems = await collectItems({
-        token: resolveToken(tokenArg), mcpUrl, handler, ws: ms, we: me,
-        mcpTool: args.mcpTool,
-        mcpArgs: args.mcpArgs ? JSON.parse(args.mcpArgs) : {},
-        withTasks: !args.noTasks,
-      });
+      if (!tokenArg) {
+        // 没有 API Key 就只按周报核对，不让整个核对失败
+        console.log('提示：没有 API Key，本次只按周报核对（未做研发平台比对）');
+      } else {
+        try {
+          const [ms, me] = monthRange(y, m);
+          platformItems = await collectItems({
+            token: resolveToken(tokenArg), mcpUrl, handler, ws: ms, we: me,
+            mcpTool: args.mcpTool,
+            mcpArgs: args.mcpArgs ? JSON.parse(args.mcpArgs) : {},
+            withTasks: !args.noTasks,
+          });
+        } catch (e) {
+          console.log(`提示：研发平台数据拉取失败（${e.message || e}），本次只按周报核对`);
+        }
+      }
     }
     const result = await (await perfLib()).perfCheckReport({
       path: checkPath, year: y, month: m, handler, platformItems,

@@ -59,11 +59,29 @@ function stamp() {
 }
 
 /** 备份一份再覆盖；备份失败不阻断主流程。 */
+const BACKUP_KEEP = 5; // 每份配置最多留 5 份历史备份（否则会一直堆积）
 function backup(file) {
   try {
     if (!fs.existsSync(file)) return null;
     const dst = `${file}.bak-${stamp()}`;
     fs.copyFileSync(file, dst);
+    // 只留最近 BACKUP_KEEP 份，多的按时间从旧到新删掉
+    try {
+      const prefix = `${path.basename(file)}.bak-`;
+      const olds = fs.readdirSync(path.dirname(file))
+        .filter((n) => n.startsWith(prefix))
+        .map((n) => {
+          const full = path.join(path.dirname(file), n);
+          let mt = 0;
+          try { mt = fs.statSync(full).mtimeMs; } catch { /* ignore */ }
+          return { full, mt };
+        })
+        .sort((a, b) => a.mt - b.mt);
+      while (olds.length > BACKUP_KEEP) {
+        const victim = olds.shift();
+        try { fs.rmSync(victim.full, { force: true }); } catch { /* ignore */ }
+      }
+    } catch { /* 清理失败不影响写配置 */ }
     return dst;
   } catch { return null; }
 }
