@@ -427,6 +427,24 @@ try {
   ok('声明会话数据仅作参考', plugin.dataSource.sessionData === 'design-reference-only', '');
   ok('声明邮件默认关闭', plugin.configuration.defaults.notifyEnabled === false, '');
 
+  // exceljs 必须随包走：以前既没 dependencies 也没 bundledDependencies，
+  // 只有"补装进包目录"的 node_modules，pnpm update 一换目录就丢（v1.3.4 修）
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8'));
+  ok('exceljs 声明为依赖', pkgJson.dependencies && pkgJson.dependencies.exceljs === '4.4.0',
+    JSON.stringify(pkgJson.dependencies || {}));
+  ok('exceljs 声明为 bundled（随包打进去）',
+    Array.isArray(pkgJson.bundledDependencies) && pkgJson.bundledDependencies.includes('exceljs'),
+    JSON.stringify(pkgJson.bundledDependencies || []));
+  ok('源目录有 exceljs 实体（打包前提）',
+    fs.existsSync(path.join(HERE, 'node_modules', 'exceljs', 'package.json')), '');
+  ok('plugin.json 组件声明与实际一致',
+    /bundledDependencies/.test(String((plugin.automatic || {}).perfComponent || '')),
+    String((plugin.automatic || {}).perfComponent || '').slice(0, 60));
+  const xlsxSrc = fs.readFileSync(path.join(HERE, 'service', 'engine', 'lib', 'xlsx.mjs'), 'utf8');
+  ok('引擎确实引入 exceljs（依赖被真正使用）',
+    /from ['"]exceljs['"]/.test(xlsxSrc) || /import\(['"]exceljs['"]\)/.test(xlsxSrc)
+    || /require\(['"]exceljs['"]\)/.test(xlsxSrc), '');
+
   console.log(`\n结果：${pass}/${pass + fail} 通过\n`);
   process.exitCode = fail ? 1 : 0;
 } catch (e) {
