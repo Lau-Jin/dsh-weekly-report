@@ -343,6 +343,47 @@ export function mergePerfRows(...args) {
  *
  * @returns {{changes: Array, rowsWritten: number, overflow: number}}
  */
+/**
+ * 版式必须能认出来才允许写入。
+ * 认不出来时按默认行/列去填，会把模板的标题写空、把布局打乱 —— 直接报错更安全。
+ */
+function assertLayoutUsable(layout, templatePath, log) {
+  if (layout && layout.detected) return true;
+  const missing = (layout && layout.missing && layout.missing.length)
+    ? layout.missing.join('、') : '表头字段';
+  const msg = `绩效表版式识别失败（缺 ${missing}），本次不写入以免破坏模板：${templatePath}`;
+  if (log) log(`提示：${msg}；请在设置页用「检测表格结构」核对模板`);
+  const err = new Error(msg);
+  err.perfLayoutMissing = true;
+  throw err;
+}
+
+/**
+ * 清空明细区的旧值（只清值，样式 / 合并区 / 区块标题一律不动）。
+ * 用于新建月份的表：模板是上个月的表，不清就会把上个月的条目带进新表。
+ */
+function clearDetailValues(ws, layout) {
+  const cols = layout.cols || {};
+  const first = layout.firstRow;
+  const last = (layout.secRow || first) - 1;
+  if (!(last >= first)) return 0;
+  const targets = [cols.category, cols.content, cols.start, cols.end, cols.done, cols.note]
+    .filter((c) => typeof c === 'number' && c > 0);
+  let cleared = 0;
+  for (let r = first; r <= last; r += 1) {
+    const row = ws.getRow(r);
+    for (const c of targets) {
+      if (isMergedSlave(ws, r, c)) continue;
+      const cell = row.getCell(c);
+      const v = cell.value;
+      if (v === null || v === undefined || v === '') continue;
+      cell.value = null;              // 只清值，样式保留
+      cleared += 1;
+    }
+  }
+  return cleared;
+}
+
 export function writeTaskRows(ws, rows, start = PERF_FIRST_ROW, layout = null) {
   const lay = layout || detectPerfLayout(ws);
   const cols = lay.cols;
@@ -383,8 +424,9 @@ export function writeTaskRows(ws, rows, start = PERF_FIRST_ROW, layout = null) {
   for (let i = 0; i < limit; i += 1) {
     const r = start + i;
     const it = list[i];
-    put(r, cols.category, it.category || null, '类别');
-    put(r, cols.content, it.content || null, '任务名称');
+    // 只写有值的格：空值不再覆盖模板里已有的内容（避免把标题/已有条目清成空白）
+    if (it.category) put(r, cols.category, it.category, '类别');
+    if (it.content) put(r, cols.content, it.content, '任务名称');
     if (it.d1) put(r, cols.start, it.d1, '开始时间', { numFmt: dateFmt });
     if (it.d2) put(r, cols.end, it.d2, '结束时间', { numFmt: dateFmt });
     put(r, cols.done, it.settled ? '是' : '否', '是否完成');
@@ -499,11 +541,13 @@ function nowSecond() {
 export async function buildPerfXlsx(opts) {
   const {
     templatePath, outPath, items, year, month,
-    handler = DEFAULT_HANDLER, accumulate = true, allowInsert = false, dryRun = false, log = console.log,
+    handler = DEFAULT_HANDLER, accumulate = true, allowInsert = true, dryRun = false, log = console.log,
   } = opts || {};
   const wb = await readWorkbook(templatePath);
   const ws = perfSheetOf(wb);
   const layout = detectPerfLayout(ws);
+  // 版式认不出来就**不写**：否则会按默认列/默认行去填，把模板的标题写空、布局打乱
+  assertLayoutUsable(layout, templatePath, log);
   const start = layout.firstRow;
 
   const sameFile = path.resolve(String(templatePath)) === path.resolve(String(outPath));
@@ -521,9 +565,25 @@ export async function buildPerfXlsx(opts) {
   const rows = mergePerfRows(existing, itemsToPerfRows(items));
   const added = rows.filter((r) => !before.has(perfKey(r.content || ''))).length;
 
+  // 新表（新建的月份 / 换模板）：先把模板明细区的旧值清掉，
+  // 只清值不动样式/合并/区块标题 —— 否则上个月的条目会混进新表（v1.3.8 修）
+  if (!sameFile) {
+    const cleared = clearDetailValues(ws, layout);
+    if (cleared && log) log(`提示：新表已清空模板明细区的 ${cleared} 个旧值（样式与区块保持不变）`);
+  }
+
   if (rows.length > layout.cap && allowInsert) {
-    insertRowsAt(ws, layout.secRow, rows.length - layout.cap);
-    if (log) log(`提示：明细区只有 ${layout.cap} 行，已按需下移考核区块 ${rows.length - layout.cap} 行`);
+    const need = rows.length - layout.cap;
+    insertRowsAt(ws, layout.secRow, need);
+    // 插行之后区块下移了，**必须重新识别版式**：否则写入仍按旧容量算，
+    // 多出来的那几条会被悄悄丢掉（v1.3.8 修）
+    const fresh = detectPerfLayout(ws);
+    layout.firstRow = fresh.firstRow;
+    layout.cap = fresh.cap;
+    layout.secRow = fresh.secRow;
+    layout.cols = fresh.cols;
+    layout.info = fresh.info;
+    if (log) log(`提示：明细区只有 ${layout.cap - need} 行，已按需下移考核区块 ${need} 行`);
   } else if (rows.length > layout.cap) {
     if (log) {
       log(`警告：明细区只剩 ${layout.cap} 行，本月共 ${rows.length} 条，超出的 ${rows.length - layout.cap} 条本次未写入`
@@ -931,6 +991,11 @@ export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER
     const updated = [...after.keys()].filter((k) => before.has(k) && !rowEquals(after.get(k), before.get(k)))
       .map((k) => after.get(k));
     if (added.length || updated.length) {
+      // 版式认不出来就不修（否则会把模板标题写空）
+      if (!lay.detected) {
+        problems.push(`绩效表版式识别失败（缺 ${(lay.missing || []).join('、')}），本次未修补`);
+        fixLines.push('⚠ 版式识别失败，未做任何修改；请用「检测表格结构」核对模板');
+      } else {
       // 明细区写满时：勾了「允许自动扩展行」就下移考核区块插行（与 buildPerfXlsx 同一套逻辑）；
       // 没勾就保持原样，靠下面的"实际落盘"检查把没写进去的条目如实报出来（以前是直接丢掉还谎称补齐）。
       let inserted = 0;
@@ -995,6 +1060,7 @@ export async function checkPerfXlsx(file, year, month, handler = DEFAULT_HANDLER
           const more = updated.length > 10 ? '…' : '';
           fixLines.push(`校正 ${updated.length} 条（起止时间 / 完成标记）：${updated.slice(0, 10).map((r) => r.content).join('；')}${more}`);
         }
+      }
       }
       void log;
     }

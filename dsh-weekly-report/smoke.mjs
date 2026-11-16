@@ -427,6 +427,100 @@ try {
   ok('声明会话数据仅作参考', plugin.dataSource.sessionData === 'design-reference-only', '');
   ok('声明邮件默认关闭', plugin.configuration.defaults.notifyEnabled === false, '');
 
+  // 绩效表写入：版式认不出来就不写、新表要清掉旧明细、行数不够自动往下加（v1.3.8）
+  {
+    const { buildPerfXlsx } = perf;
+    const xlsx2 = await import('./service/engine/lib/xlsx.mjs');
+    const mkItem = (i, day) => ({
+      category: '项目运维', school: '示例学校', subject: `事项${i}`,
+      d1: new Date(2026, 10, day), d2: new Date(2026, 10, day), settled: i % 2 === 0, note: '',
+    });
+    const readBack = async (file) => {
+      const book = await xlsx2.readWorkbook(file);
+      const sheet = perf.perfSheetOf(book);
+      const secs = [];
+      for (let r = 1; r <= sheet.rowCount; r += 1) {
+        const v = sheet.getCell(r, 2).value;
+        if (typeof v === 'string' && /工作任务考核|工作绩效考核|品质/.test(v)) secs.push(r);
+      }
+      const detail = [];
+      for (let r = 7; r <= sheet.rowCount; r += 1) {
+        const v = sheet.getCell(r, 4).value;
+        const cat = sheet.getCell(r, 2).value;
+        // 只数明细区（考核区块及其指标行不算）
+        if (v && cat && !/考核|细分|交付部署|项目支撑|内部事项|值班事项|目标达成度|工作量|工作效率|工作质量|工作满意度|必备知识|专业技能|综合能力|团队贡献/.test(String(v))) {
+          detail.push([r, String(v)]);
+        }
+      }
+      return { sheet, secs, detail };
+    };
+
+    // ① 版式认不出来 → 拒绝写入（不能把模板标题写空）
+    const badTpl = path.join(DATA, 'smoke-perf-bad.xlsx');
+    {
+      const wb3 = new ExcelJS.Workbook();
+      await wb3.xlsx.readFile(fixture);
+      const s3 = wb3.getWorksheet('月度考核');
+      for (const c of [2, 4, 10, 11, 12, 13]) s3.getCell(6, c).value = '';
+      await wb3.xlsx.writeFile(badTpl);
+    }
+    const badOut = path.join(DATA, 'smoke-perf-bad-out.xlsx');
+    let refused = false;
+    try {
+      await buildPerfXlsx({
+        templatePath: badTpl, outPath: badOut, items: [mkItem(1, 3)],
+        year: 2026, month: 11, handler: '张三', allowInsert: true, log: () => {},
+      });
+    } catch (e) { refused = /版式识别失败/.test(String(e.message || e)); }
+    ok('版式认不出来就拒绝写入（不把模板标题写空）',
+      refused && !fs.existsSync(badOut), `refused=${refused} 产出=${fs.existsSync(badOut)}`);
+
+    // ② 用填满的旧表当模板生成"新月"表 → 旧明细要清掉，只留新条目
+    const filledTpl = path.join(DATA, 'smoke-perf-filled.xlsx');
+    fs.copyFileSync(fixture, filledTpl);
+    {
+      const book0 = await xlsx2.readWorkbook(filledTpl);
+      const sheet0 = perf.perfSheetOf(book0);
+      const lay0 = detectPerfLayout(sheet0);
+      await buildPerfXlsx({
+        templatePath: filledTpl, outPath: path.join(DATA, 'smoke-perf-filled-out.xlsx'),
+        items: Array.from({ length: 20 }, (_, i) => mkItem(i, 3)),
+        year: 2026, month: 11, handler: '张三', allowInsert: true, log: () => {},
+      });
+      ok('旧表当模板时先认版式（明细行 7~ 起）', lay0.firstRow === 7, `firstRow=${lay0.firstRow}`);
+    }
+    const nextOut = path.join(DATA, 'smoke-perf-next.xlsx');
+    await buildPerfXlsx({
+      templatePath: filledTpl, outPath: nextOut, items: [mkItem(99, 3)],
+      year: 2026, month: 12, handler: '张三', allowInsert: true, log: () => {},
+    });
+    const nb = await readBack(nextOut);
+    ok('新月表不带上个月的旧条目（只留本次写入的）',
+      nb.detail.length === 1 && /事项99/.test(nb.detail[0][1]),
+      `明细 ${nb.detail.length} 行 ${JSON.stringify(nb.detail.slice(0, 3))}`);
+    ok('新月表的区块标题仍在', nb.secs.length === 3, JSON.stringify(nb.secs));
+
+    // ③ 明细区写满 → 自动往下插行，结构指纹不变、标题不丢
+    const manyOut = path.join(DATA, 'smoke-perf-many.xlsx');
+    const manyRes = await buildPerfXlsx({
+      templatePath: filledTpl, outPath: manyOut,
+      items: Array.from({ length: 60 }, (_, i) => mkItem(i, 3)),
+      year: 2026, month: 11, handler: '张三', allowInsert: true, log: () => {},
+    });
+    const mb = await readBack(manyOut);
+    ok('明细区写满会自动往下插行（条目不丢）',
+      mb.detail.length === 60, `明细 ${mb.detail.length} 行`);
+    ok('插行后区块标题不丢', mb.secs.length === 3, JSON.stringify(mb.secs));
+    const mr = typeof manyRes === 'string' ? {} : manyRes;
+    ok('插行不改表格结构（结构指纹无差异）',
+      !mr.structural || mr.structural.length === 0, JSON.stringify((mr.structural || []).slice(0, 3)));
+  }
+
+  // 面板：来回切插件页面后要停在原来那一页（别自己跳回概览）
+  ok('面板记住当前视图（localStorage）',
+    /localStorage\.setItem\('ws-view'/.test(jsText) && /localStorage\.getItem\('ws-view'/.test(jsText),
+    '切走再回来仍停在原页面');
+
   // exceljs 必须随包走：以前既没 dependencies 也没 bundledDependencies，
   // 只有"补装进包目录"的 node_modules，pnpm update 一换目录就丢（v1.3.4 修）
   const pkgJson = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8'));

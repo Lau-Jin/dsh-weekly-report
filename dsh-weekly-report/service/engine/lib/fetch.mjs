@@ -405,7 +405,7 @@ export function detailToTask(detail, parent) {
 }
 
 /** 补拉本期已纳入父任务的子任务（task_list_my_tasks 不返回子任务） */
-export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownIds, limit = 80 }) {
+export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownIds, limit = 80, useCache = true }) {
   const out = [];
   let used = 0;
   if (!parents || !parents.length) return out;
@@ -425,7 +425,7 @@ export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownId
     }
     const pid = parent.id || parent.taskId;
     if (pid === undefined || pid === null) continue;
-    let pdet = cacheRead(`task_${pid}`);
+    let pdet = useCache ? cacheRead(`task_${pid}`) : null;
     if (pdet === null) {
       const resp = await callWithRetry(client, TASK_DETAIL_TOOL, { taskId: Number(pid), logLimit: 1, worklogLimit: 1 });
       used += 1;
@@ -435,7 +435,7 @@ export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownId
       } catch {
         continue;
       }
-      cacheWrite(`task_${pid}`, pdet);
+      if (useCache) cacheWrite(`task_${pid}`, pdet);
     } else {
       used += 1;
     }
@@ -444,7 +444,7 @@ export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownId
       if (used >= limit) break;
       const cid = child && child.id;
       if (cid === undefined || cid === null || existing.has(String(cid))) continue;
-      let cdet = cacheRead(`task_${cid}`);
+      let cdet = useCache ? cacheRead(`task_${cid}`) : null;
       if (cdet === null) {
         const cresp = await callWithRetry(client, TASK_DETAIL_TOOL, { taskId: Number(cid), logLimit: 1, worklogLimit: 1 });
         used += 1;
@@ -454,7 +454,7 @@ export async function fetchSubtaskTasks({ token, mcpUrl, parents, myIds, knownId
         } catch {
           continue;
         }
-        cacheWrite(`task_${cid}`, cdet);
+        if (useCache) cacheWrite(`task_${cid}`, cdet);
       }
       const item = detailToTask(cdet, parent);
       if (!item) continue;

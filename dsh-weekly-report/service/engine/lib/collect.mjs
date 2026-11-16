@@ -32,9 +32,11 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
   const wlStart = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() - 60);
   const today = todayCn();
   const wlEnd = we > today ? we : today;
-  const worklogs = await fetchMyWorklogs({ token, url: mcpUrl, start: wlStart, end: wlEnd });
+  // useCache 必须透传：否则「重新拉取数据」只刷工单/任务，工时仍走缓存，
+  // 刚补的完成备注刷不到，周报里的完成状态就不会变（v1.3.8 修）
+  const worklogs = await fetchMyWorklogs({ token, url: mcpUrl, start: wlStart, end: wlEnd, useCache });
   const t2 = Date.now();
-  const workdays = await fetchWorkdays({ token, url: mcpUrl, start: ws, end: we });
+  const workdays = await fetchWorkdays({ token, url: mcpUrl, start: ws, end: we, useCache });
   const t3 = Date.now();
   console.log(`[计时] 工单 ${secs(t1 - t0)}s · 工时 ${secs(t2 - t1)}s · 工作日 ${secs(t3 - t2)}s`);
 
@@ -67,7 +69,9 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
       const known = new Set(tasks.map((t) => String(t.id)));
       const missing = [...wlTaskIds].filter((id) => !known.has(id)).sort();
       const t6 = Date.now();
-      const details = missing.length ? await fetchTaskDetails({ token, taskIds: missing, url: mcpUrl }) : new Map();
+      const details = missing.length
+        ? await fetchTaskDetails({ token, taskIds: missing, url: mcpUrl, useCache })
+        : new Map();
       const t7 = Date.now();
       console.log(`[计时] 补拉任务详情 ${secs(t7 - t6)}s（${missing.length} 个）`);
 
@@ -89,7 +93,7 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
       let subtasks = [];
       try {
         subtasks = await fetchSubtaskTasks({
-          token, mcpUrl, parents: parentsToExpand, myIds: myUserIds(tasks), knownIds: knownAll,
+          token, mcpUrl, parents: parentsToExpand, myIds: myUserIds(tasks), knownIds: knownAll, useCache,
         });
       } catch (subErr) {
         // 子任务补录是「锦上添花」：失败只记一句，不能把整批任务条目丢掉

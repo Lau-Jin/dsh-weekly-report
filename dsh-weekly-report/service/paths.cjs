@@ -83,7 +83,7 @@ function defaultConfig() {
     out_dir: REPORTS,
     folder: '',
     perf_template: '',
-    perf_allow_insert: false,
+    perf_allow_insert: true,
     report_template: '',
     handler: '',
     threshold: 0.85,

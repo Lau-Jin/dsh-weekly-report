@@ -145,6 +145,8 @@
   // ---------------------------------------------------------------- 导航
   function switchView(name) {
     S.view = name;
+    // 记住当前页：iframe 被宿主重建时 URL 参数会丢，靠它保持用户停留的页面
+    try { localStorage.setItem('ws-view', name); } catch { /* ignore */ }
     $$('.ws-nav__item').forEach((b) => b.classList.toggle('is-active', b.dataset.view === name));
     $$('.ws-view').forEach((v) => v.classList.toggle('is-active', v.dataset.pane === name));
     try {
@@ -709,8 +711,12 @@
   });
 
   // ---------------------------------------------------------------- 启动
-  const initial = new URL(location.href).searchParams.get('view');
-  if (initial && ['overview', 'generate', 'settings', 'history'].includes(initial)) switchView(initial);
+  const VIEWS = ['overview', 'generate', 'settings', 'history'];
+  let initial = new URL(location.href).searchParams.get('view');
+  if (!initial || !VIEWS.includes(initial)) {
+    try { initial = localStorage.getItem('ws-view'); } catch { initial = null; }
+  }
+  if (initial && VIEWS.includes(initial)) switchView(initial);
   void loadState();
   void loadTemplate();
   setInterval(() => { if (!S.runTimer) void loadState(); }, 20000);

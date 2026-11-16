@@ -371,7 +371,8 @@ async function main() {
       }
       const built = await (await perfLib()).buildPerfXlsx({
         templatePath: tpl, outPath: perfOut, items: mItems, year: y, month: m, handler,
-        allowInsert: Boolean(args.perfAllowInsert || cfg.perf_allow_insert),
+        // 默认允许自动扩展行（明细区写满时往下插行，不丢条目）；设置里可关
+      allowInsert: args.perfAllowInsert === 'false' ? false : cfg.perf_allow_insert !== false,
         dryRun: Boolean(args.perfPreview),
       });
       const builtPath = typeof built === 'string' ? built : built.path;
@@ -397,6 +398,27 @@ async function main() {
       }
       if (monthEndWeek) {
         console.log(`（本轮已覆盖 ${y}年${m}月月末：这是月底最终核对，已用平台整月数据补全）`);
+        // 顺带把下个月的表建好（结构取自本月表、明细区留空），
+        // 下个月第一次生成时直接往里写，不必再等有数据才建（v1.3.8）
+        try {
+          const ny = m === 12 ? y + 1 : y;
+          const nm = m === 12 ? 1 : m + 1;
+          const nextOut = (await perfLib()).perfPathFor(folder, handler, ny, nm);
+          if (!fs.existsSync(nextOut)) {
+            const nextBuilt = await (await perfLib()).buildPerfXlsx({
+              templatePath: builtPath, outPath: nextOut, items: [], year: ny, month: nm, handler,
+              allowInsert: false,
+            });
+            const nextPath = typeof nextBuilt === 'string' ? nextBuilt : nextBuilt.path;
+            artifacts.perf.push({
+              path: nextPath, name: path.basename(nextPath), year: ny, month: nm,
+              count: 0, added: 0, changes: 0, structure: [], backup: '',
+            });
+            console.log(`提示：已为下个月（${ny}年${nm}月）建好绩效表（结构同本月，明细待填）：${nextPath}`);
+          }
+        } catch (nextErr) {
+          console.log(`提示：下个月绩效表未能预建（${nextErr.message || nextErr}），不影响本月结果`);
+        }
       }
     }
 
