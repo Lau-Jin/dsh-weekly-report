@@ -656,6 +656,20 @@ try {
     ok('归属：自出模式（目标=账号本人）→ 本人的工时算自己的', r7.mine === true, r7.reason);
   }
 
+  // 版本与回退（面板里点一下就能回退，不用命令行）
+  {
+    const vres = await req('/api/versions');
+    ok('/api/versions 返回版本信息',
+      vres.body.ok === true && typeof vres.body.current === 'string' && Array.isArray(vres.body.versions),
+      `current=${vres.body.current} 可回退=${vres.body.canRollback}`);
+    const logres = await req('/api/rollback-log');
+    ok('/api/rollback-log 可读（没回退过时为空）',
+      logres.body.ok === true && typeof logres.body.log === 'string', '');
+    const bad = await post('/api/rollback', { version: 'not-a-version' });
+    ok('回退接口校验版本号格式', bad.body.ok === false && /版本号格式/.test(bad.body.error || ''),
+      bad.body.error || '');
+  }
+
   // 面板：来回切插件页面后要停在原来那一页（别自己跳回概览）
   ok('面板记住当前视图（localStorage）',
     /localStorage\.setItem\('ws-view'/.test(jsText) && /localStorage\.getItem\('ws-view'/.test(jsText),

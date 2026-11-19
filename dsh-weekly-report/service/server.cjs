@@ -9,6 +9,7 @@
 'use strict';
 
 const http = require('node:http');
+const https = require('node:https');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -27,6 +28,13 @@ const VERSION = (() => {
     return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || '0.0.0';
   } catch { return '0.0.0'; }
 })();
+/** npm 上的包名（安装后的副本里就是发布名，源码目录里是本地名） */
+const PKG_NAME = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).name || 'dsh-weekly-report-lau';
+  } catch { return 'dsh-weekly-report-lau'; }
+})();
+const ROLLBACK_LOG = path.join(P.LOGS, 'rollback.log');
 const PORT = Number(process.env.WEEKLY_PANEL_PORT || 8798);
 const HOST = '127.0.0.1';
 const STARTED = Date.now();
@@ -113,6 +121,43 @@ function startScheduler() {
   if (typeof st.lastResult === 'string') sched.lastResult = st.lastResult;
   sched.timer = setInterval(scheduleTick, SCHEDULE_TICK_MS);
   if (sched.timer && typeof sched.timer.unref === 'function') sched.timer.unref();
+}
+
+/**
+ * 推导 DSH profile 目录：面板装在 <profile>/node_modules/<包>/service/ 里。
+ * 源码运行（开发目录）时推不出来 → 回退功能会明确提示不可用。
+ */
+function profileDir() {
+  const d = path.resolve(__dirname, '..', '..', '..');
+  try {
+    if (fs.existsSync(path.join(d, 'package.json'))
+      && fs.existsSync(path.join(d, 'node_modules'))
+      && fs.existsSync(path.join(d, 'pnpm-workspace.yaml'))) return d;
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** 查 registry 上的已发布版本（倒序） */
+function registryVersions(pkg) {
+  return new Promise((resolve) => {
+    const req = https.get(`https://registry.npmjs.org/${encodeURIComponent(pkg)}`, { timeout: 12000 }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const versions = Object.keys(data.versions || {}).filter((v) => /^\d+\.\d+\.\d+$/.test(v));
+          versions.sort((a, b) => {
+            const pa = a.split('.').map(Number); const pb = b.split('.').map(Number);
+            return (pb[0] - pa[0]) || (pb[1] - pa[1]) || (pb[2] - pa[2]);
+          });
+          resolve({ ok: true, versions, latest: (data['dist-tags'] || {}).latest || '' });
+        } catch { resolve({ ok: false, versions: [], error: 'registry 返回无法解析' }); }
+      });
+    });
+    req.on('error', (e) => resolve({ ok: false, versions: [], error: e.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, versions: [], error: '请求 registry 超时' }); });
+  });
 }
 
 function json(res, code, body) {
@@ -476,6 +521,69 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, version: VERSION, pid: process.pid, startedAt: new Date(STARTED).toISOString(), uptimeMs: Date.now() - STARTED, busy: run.running });
     }
     if (method === 'GET' && p === '/api/state') return json(res, 200, collectState());
+
+    if (method === 'GET' && p === '/api/versions') {
+      const profile = profileDir();
+      const reg = await registryVersions(PKG_NAME);
+      let installed = '';
+      if (profile) {
+        try {
+          installed = JSON.parse(fs.readFileSync(path.join(profile, 'node_modules', PKG_NAME, 'package.json'), 'utf8')).version || '';
+        } catch { /* ignore */ }
+      }
+      return json(res, 200, {
+        ok: true,
+        pkg: PKG_NAME,
+        current: VERSION,
+        installed,
+        profile,
+        canRollback: Boolean(profile),
+        latest: reg.latest,
+        versions: reg.versions,
+        error: reg.ok ? '' : (reg.error || '无法连接 registry'),
+      });
+    }
+
+    if (method === 'GET' && p === '/api/rollback-log') {
+      let text = '';
+      try { text = fs.readFileSync(ROLLBACK_LOG, 'utf8'); } catch { /* 还没回退过 */ }
+      return json(res, 200, { ok: true, log: text.split('\n').slice(-80).join('\n') });
+    }
+
+    if (method === 'POST' && p === '/api/rollback') {
+      const body = await readBody(req);
+      const version = String(body.version || '').trim();
+      if (!/^\d+\.\d+\.\d+$/.test(version)) {
+        return json(res, 200, { ok: false, error: '版本号格式不对（应为 x.y.z）' });
+      }
+      const profile = profileDir();
+      if (!profile) {
+        return json(res, 200, { ok: false, error: '当前不是安装在 DSH profile 里（源码运行），无法回退' });
+      }
+      const reg = await registryVersions(PKG_NAME);
+      if (!reg.ok) return json(res, 200, { ok: false, error: `查不到已发布版本：${reg.error || '未知原因'}` });
+      if (!reg.versions.includes(version)) {
+        return json(res, 200, { ok: false, error: `registry 上没有 ${version}（可选：${reg.versions.slice(0, 8).join('、')}…）` });
+      }
+      // worker 复制到数据目录再跑：回退时插件目录会被换掉，跑着的脚本不能跟着消失
+      const worker = path.join(P.DATA_DIR, 'rollback.cjs');
+      try {
+        fs.copyFileSync(path.join(__dirname, 'rollback.cjs'), worker);
+        fs.rmSync(ROLLBACK_LOG, { force: true });
+      } catch (e) {
+        return json(res, 200, { ok: false, error: `准备回退程序失败：${e.message}` });
+      }
+      const child = spawn(process.execPath, [
+        worker, '--pkg', PKG_NAME, '--version', version, '--profile', profile,
+        '--port', String(PORT), '--log', ROLLBACK_LOG,
+      ], { cwd: profile, windowsHide: true, detached: true, stdio: 'ignore' });
+      child.unref();
+      P.log(`rollback: started ${PKG_NAME}@${version}`);
+      return json(res, 200, {
+        ok: true, started: true, version,
+        note: '回退已开始：面板会短暂断开（插件目录被替换），完成后请重启一次 DSH。',
+      });
+    }
 
     if (method === 'POST' && p === '/api/config') {
       const body = await readBody(req);

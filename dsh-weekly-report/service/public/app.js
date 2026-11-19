@@ -712,6 +712,101 @@
     if ($('#opt-perf').checked && S.state && !S.state.excelAvailable) toast('绩效表写入需要先在「设置」里补装组件', 'warn');
   });
 
+  // ---------------------------------------------------------------- 版本与回退
+  let versionInfo = null;
+
+  async function loadVersions() {
+    const sel = $('#sel-version');
+    const badge = $('#version-badge');
+    sel.disabled = true;
+    $('#btn-rollback').disabled = true;
+    try {
+      const r = await api('/api/versions');
+      versionInfo = r;
+      const list = (r.versions || []).filter((v) => v !== r.current);
+      if (!r.ok) {
+        badge.textContent = '读取失败';
+        badge.className = 'ws-badge ws-badge--warn';
+        $('#version-desc').textContent = `读取已发布版本失败：${r.error || '未知原因'}`;
+        sel.innerHTML = '<option value="">读取失败</option>';
+        return;
+      }
+      badge.textContent = `当前 v${r.current}`;
+      badge.className = 'ws-badge ws-badge--ok';
+      if (!r.canRollback) {
+        $('#version-desc').textContent = '当前不是安装在 DSH profile 里（源码运行），回退不可用。';
+        sel.innerHTML = '<option value="">不可用</option>';
+        return;
+      }
+      $('#version-desc').textContent = `已发布 ${(r.versions || []).length} 个版本，最新 ${r.latest || '—'}；`
+        + `回退会替换插件目录，面板短暂断开，完成后重启一次 DSH。`;
+      const opts = ['<option value="">选择要回退到的版本…</option>'];
+      for (const v of list) {
+        const tag = v === r.installed ? `（当前已装 ${v}）` : '';
+        opts.push(`<option value="${v}">${v}${tag}${v === r.latest ? ' · 最新' : ''}</option>`);
+      }
+      sel.innerHTML = opts.join('');
+      sel.disabled = false;
+      $('#btn-rollback').disabled = true;
+    } catch (e) {
+      badge.textContent = '读取失败';
+      sel.innerHTML = '<option value="">读取失败</option>';
+    }
+  }
+
+  async function refreshRollbackLog() {
+    try {
+      const r = await api('/api/rollback-log');
+      const log = (r.log || '').trim();
+      if (!log) return;
+      $('#rollback-output').hidden = false;
+      $('#rollback-log').textContent = log;
+      const box = $('#rollback-log');
+      box.scrollTop = box.scrollHeight;
+    } catch { /* 日志读不到就算了 */ }
+  }
+
+  $('#btn-load-versions').addEventListener('click', () => { void loadVersions(); });
+  $('#btn-rollback-refresh').addEventListener('click', () => { void refreshRollbackLog(); });
+  $('#sel-version').addEventListener('change', (e) => {
+    const v = e.target.value;
+    $('#btn-rollback').disabled = !v || !versionInfo || !versionInfo.canRollback;
+  });
+  $('#btn-rollback').addEventListener('click', async () => {
+    const v = $('#sel-version').value;
+    if (!v) return;
+    if (!confirm(`确定把插件回退到 v${v}？\n\n回退会替换插件目录，面板会短暂断开；完成后请重启一次 DSH。\n你的周报、绩效表与配置不会被动。`)) return;
+    const btn = $('#btn-rollback');
+    btn.disabled = true;
+    btn.textContent = '回退中…';
+    $('#rollback-output').hidden = false;
+    $('#rollback-status').textContent = `正在回退到 v${v}…`;
+    $('#rollback-log').textContent = '已发起回退，下面是实时日志：';
+    try {
+      const r = await post('/api/rollback', { version: v });
+      if (!r.ok) {
+        $('#rollback-status').textContent = '回退未开始';
+        $('#rollback-log').textContent = `回退未开始：${r.error || '未知原因'}`;
+        toast(r.error || '回退未开始', 'err');
+      } else {
+        $('#rollback-status').textContent = '回退进行中';
+        toast('回退已开始，面板会短暂断开', 'warn');
+      }
+    } catch (e) {
+      $('#rollback-status').textContent = '回退未开始';
+      toast(`回退失败：${e.message}`, 'err');
+    }
+    btn.textContent = '回退到该版本';
+    btn.disabled = true;
+    // 回退期间面板会被替换/断开，这里只尽量把日志刷出来
+    for (let i = 0; i < 40; i += 1) {
+      await new Promise((r2) => setTimeout(r2, 3000));
+      try {
+        await refreshRollbackLog();
+      } catch { break; }
+    }
+  });
+
   // ---------------------------------------------------------------- 启动
   const VIEWS = ['overview', 'generate', 'settings', 'history'];
   let initial = new URL(location.href).searchParams.get('view');
@@ -721,5 +816,7 @@
   if (initial && VIEWS.includes(initial)) switchView(initial);
   void loadState();
   void loadTemplate();
+  void loadVersions();
+  void refreshRollbackLog();
   setInterval(() => { if (!S.runTimer) void loadState(); }, 20000);
 })();

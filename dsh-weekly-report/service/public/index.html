@@ -249,6 +249,28 @@
           </div>
 
           <div class="ws-card ws-card--soft">
+            <div class="ws-card">
+              <div class="ws-card__head"><h2>版本与回退</h2><span class="ws-badge" id="version-badge">检测中</span></div>
+              <p class="ws-card__desc" id="version-desc">面板可以直接把插件回退到已发布的旧版本，不用敲命令。</p>
+              <div class="ws-field ws-field--2">
+                <div><label for="sel-version">目标版本</label>
+                  <select id="sel-version"><option value="">读取中…</option></select></div>
+                <div><label>&nbsp;</label>
+                  <button class="ws-btn ws-btn--ghost" id="btn-load-versions" type="button">刷新版本列表</button></div>
+              </div>
+              <div class="ws-card__actions">
+                <button class="ws-btn ws-btn--ghost" id="btn-rollback" type="button" disabled>回退到该版本</button>
+              </div>
+              <p class="ws-card__desc">回退会替换插件目录，面板会短暂断开；完成后请重启一次 DSH。你的周报、绩效表与配置都不会被动。</p>
+              <div class="ws-output" id="rollback-output" hidden>
+                <div class="ws-output__head">
+                  <span class="ws-output__status" id="rollback-status">回退日志</span>
+                  <button class="ws-link" id="btn-rollback-refresh" type="button">刷新日志</button>
+                </div>
+                <pre class="ws-log ws-log--small ws-scroll" id="rollback-log"></pre>
+              </div>
+            </div>
+
             <div class="ws-card__head"><h2>绩效表组件</h2><span class="ws-badge" id="excel-badge">检测中</span></div>
             <p class="ws-card__desc" id="deps-desc">完整安装包已自带组件，写入 .xlsx 无需联网；纯周报 txt 生成不依赖它。</p>
             <div class="ws-card__actions">
