@@ -72,7 +72,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <h1>装上，就能用</h1>
     <p>一条命令完成安装与启动，不用重启 DSH、不用手工拉服务。API Key、输出目录、绩效表与模板由你按需提供，插件负责识别并据此生成、输出。</p>
     <div class="stat">
-      <div><b>v1.5.0</b><small>版本号取自 package.json</small></div>
+      <div><b>v1.6.0</b><small>版本号取自 package.json</small></div>
       <div><b>0 预置凭据</b><small>邮件默认关闭</small></div>
       <div><b>4 个页面</b><small>概览 / 生成 / 设置 / 历史</small></div>
     </div>
@@ -94,7 +94,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <p><b>推荐：通过 npm 安装，全程不用本地脚本。</b>本插件是纯 npm 包，安装、升级、卸载都走标准流程。</p>
     <p>在 DSH 的 profile 目录（<code>%USERPROFILE%\.dsh\profiles\desktop</code>）执行：</p>
     <pre><button class="copy">复制</button>pnpm add dsh-weekly-report-lau</pre>
-    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.5.0"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
+    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.6.0"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
     <div class="note">不需要重启 DSH：新包就位后，宿主下一次心跳（≤20 秒）即拉起新版本面板；若侧边栏没刷新，点面板里的刷新即可。环境依赖只有两条：Node ≥ 20（DSH 自带）、profile 目录可写；不依赖联网（绩效表组件已随包自带），不需要 Python 或外部服务。</div>
     <table><tr><th>命令</th><th>用途</th></tr>
       <tr><td><code>pnpm add dsh-weekly-report-lau</code></td><td>安装 / 升级到最新版</td></tr>

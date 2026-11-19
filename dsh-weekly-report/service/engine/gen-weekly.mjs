@@ -299,7 +299,7 @@ async function main() {
     if (me > spanEnd) spanEnd = me;
   }
 
-  const ownershipMode = (cfg.ownership && cfg.ownership.mode) || 'loose';
+  const ownershipMode = (cfg.ownership && cfg.ownership.mode) || 'strict';
   const allItems = await collectItems({
     token, mcpUrl, handler, ws: spanStart, we: spanEnd,
     mcpTool: args.mcpTool, mcpArgs: dataArgs,
@@ -403,7 +403,7 @@ function listMonthsWithReports(outDir) {
         const extra = await collectItems({
           token, mcpUrl, handler, ws: ms, we: me,
           mcpTool: args.mcpTool, mcpArgs: dataArgs, withTasks: !args.noTasks, useCache: !args.noCache,
-          ownershipMode: (cfg.ownership && cfg.ownership.mode) || 'loose',
+          ownershipMode: (cfg.ownership && cfg.ownership.mode) || 'strict',
         });
         const have = new Set(mItems.map((i) => `${i.school}\u0000${i.subject}`));
         for (const i of extra) {

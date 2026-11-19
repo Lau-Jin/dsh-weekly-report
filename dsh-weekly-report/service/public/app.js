@@ -212,7 +212,6 @@
     $('#f-folder').value = c.folder || '';
     $('#f-perf-template').value = c.perf_template || '';
     $('#f-perf-insert').checked = Boolean(c.perf_allow_insert);
-  $('#f-ownership-strict').checked = Boolean(c.ownership && c.ownership.mode === 'strict');
     $('#f-threshold').value = c.threshold ?? 0.85;
     const sc = c.schedule || {};
     $('#f-schedule-enabled').checked = Boolean(sc.enabled);
@@ -324,7 +323,6 @@
       folder: $('#f-folder').value.trim(),
       perf_template: $('#f-perf-template').value.trim(),
       perf_allow_insert: $('#f-perf-insert').checked,
-    ownership: { mode: $('#f-ownership-strict').checked ? 'strict' : 'loose' },
       threshold: Number($('#f-threshold').value) || 0.85,
       schedule: {
         enabled: $('#f-schedule-enabled').checked,

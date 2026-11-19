@@ -102,8 +102,9 @@ function defaultConfig() {
     folder: '',
     perf_template: '',
     perf_allow_insert: true,
-  // 归属口径（v1.5.0 测试版）：loose = 旧行为；strict = 剔除「只是可见、不是我干的」工单
-  ownership: { mode: 'loose' },
+  // 归属口径：strict = 默认，剔除「只是可见、不是我干的」工单；
+  // 应急时可在配置里改成 loose 回到旧口径（面板不再提供开关）
+  ownership: { mode: 'strict' },
     report_template: '',
     handler: '',
     threshold: 0.85,

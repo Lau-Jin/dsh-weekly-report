@@ -68,6 +68,7 @@ function nameIn(value, person) {
  * @returns {{mine:boolean, reason:string, signals:object}}
  */
 export function classifyOwnership(item, ctx = {}) {
+  // 默认 strict；ctx.mode === 'loose' 是应急逃生口（回到旧口径）
   const mode = ctx.mode === 'loose' ? 'loose' : 'strict';
   const handler = String(ctx.handler || '').trim();
   const owner = item.owner || '';

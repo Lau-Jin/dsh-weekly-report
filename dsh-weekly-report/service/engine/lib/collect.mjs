@@ -29,7 +29,7 @@ import { makeDate, toDate, todayCn } from './util.mjs';
  */
 export async function collectItems({
   token, mcpUrl, handler, ws, we, mcpTool, mcpArgs, withTasks = true, useCache = true,
-  ownershipMode = 'loose',
+  ownershipMode = 'strict',
 }) {
   const t0 = Date.now();
   const { tickets } = await fetchTicketsViaMcp({
