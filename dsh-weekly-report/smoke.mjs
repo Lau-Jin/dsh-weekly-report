@@ -629,30 +629,30 @@ try {
     const selfIds = new Set(['64']);
     const targetIds = new Set(['137']);
     const ctx = {
-      handler: '陈欢', mode: 'strict', selfIds, targetIds,
-      selfNames: new Set(['刘晋']), targetWorklogTasks: new Set(), myWorklogTasks: new Set(['9']),
+      handler: '张三', mode: 'strict', selfIds, targetIds,
+      selfNames: new Set(['李四']), targetWorklogTasks: new Set(), myWorklogTasks: new Set(['9']),
     };
-    const r1 = classifyOwnership({ owner: '陈欢', owner_id: '137', task_id: '1' }, ctx);
+    const r1 = classifyOwnership({ owner: '张三', owner_id: '137', task_id: '1' }, ctx);
     ok('归属：处理人是本人 → 计入', r1.mine === true, r1.reason);
 
-    const r2 = classifyOwnership({ owner: '刘晋', owner_id: '64', initiator: '陈欢', initiator_id: '137', task_id: '2' }, ctx);
+    const r2 = classifyOwnership({ owner: '李四', owner_id: '64', initiator: '张三', initiator_id: '137', task_id: '2' }, ctx);
     ok('归属：只是创建人（处理人与工时都不是本人）→ 剔除', r2.mine === false, r2.reason);
 
-    const r3 = classifyOwnership({ owner: '刘晋', owner_id: '64', task_id: '9' }, ctx);
+    const r3 = classifyOwnership({ owner: '李四', owner_id: '64', task_id: '9' }, ctx);
     ok('归属：代出时账号自己的工时不算目标的 → 剔除', r3.mine === false, r3.reason);
 
     const ctx2 = { ...ctx, targetWorklogTasks: new Set(['9']) };
-    const r4 = classifyOwnership({ owner: '刘晋', owner_id: '64', task_id: '9' }, ctx2);
+    const r4 = classifyOwnership({ owner: '李四', owner_id: '64', task_id: '9' }, ctx2);
     ok('归属：目标本人确实有工时 → 计入', r4.mine === true, r4.reason);
 
     const r5 = classifyOwnership({ owner: '王五', owner_id: '88', task_id: '3' }, ctx);
     ok('归属：与本人无关（纯权限可见）→ 剔除', r5.mine === false, r5.reason);
 
-    const r6 = classifyOwnership({ owner: '陈欢', owner_id: '137', task_id: '1' }, { ...ctx, mode: 'loose' });
+    const r6 = classifyOwnership({ owner: '张三', owner_id: '137', task_id: '1' }, { ...ctx, mode: 'loose' });
     ok('归属：loose 模式保持旧行为（不剔除）', r6.mine === true, r6.reason);
 
-    const ctxSelf = { ...ctx, handler: '刘晋', targetIds: selfIds, selfNames: new Set(['刘晋']) };
-    const r7 = classifyOwnership({ owner: '刘晋', owner_id: '64', task_id: '9' }, ctxSelf);
+    const ctxSelf = { ...ctx, handler: '李四', targetIds: selfIds, selfNames: new Set(['李四']) };
+    const r7 = classifyOwnership({ owner: '李四', owner_id: '64', task_id: '9' }, ctxSelf);
     ok('归属：自出模式（目标=账号本人）→ 本人的工时算自己的', r7.mine === true, r7.reason);
   }
 
