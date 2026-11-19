@@ -13,6 +13,9 @@ import {
   buildItemsFromTasks, buildItemsFromTickets, mergeItems, taskChildStats, worklogDates,
 } from './rules.mjs';
 import { makeDate, toDate, todayCn } from './util.mjs';
+import { McpClient, mcpError } from './mcp.mjs';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * @param {object} opts
@@ -195,14 +198,28 @@ export async function collectItems({
 
 /**
  * 代出场景：查「目标处理人本人」在哪些任务上有工时。
- * 候选任务 = 账号有工时的任务 + 「创建人是目标但处理人不是目标」的工单对应任务；
+ *
+ * 候选任务只有两类（两类都必须是「处理人不是目标、但目标可能真干过」的任务）：
+ *   ① 账号自己有工时、而该工单的处理人**不是**目标的
+ *      （处理人就是目标的直接计入，不必再查工时 —— 这一步能把查询量压掉一大截）
+ *   ② 创建人是目标、但处理人不是目标的工单对应任务
  * 逐个按 taskId 查所有人工时（带 6 小时缓存），看有没有目标本人的记录。
+ * 查询之间留一点间隔，避免把接口打到限流（限流会让判定退化成"当成没有"）。
  */
 async function resolveTargetWorklogTasks({ token, mcpUrl, handler, tickets, worklogs, useCache, targetIds }) {
   const candidates = new Set();
+  const ownerByTask = new Map();
+  for (const t of tickets || []) {
+    const tid = String(t.task_id ?? '');
+    if (tid && tid !== 'undefined' && tid !== 'null') ownerByTask.set(tid, String(t.handler || ''));
+  }
   for (const w of worklogs) {
     const tid = String(w.task_id);
-    if (tid && tid !== 'undefined' && tid !== 'null') candidates.add(tid);
+    if (!tid || tid === 'undefined' || tid === 'null') continue;
+    // 处理人就是目标 → 本来就计入，不必查工时
+    const owner = ownerByTask.get(tid);
+    if (owner && nameMatches(owner, handler)) continue;
+    candidates.add(tid);
   }
   for (const t of tickets || []) {
     const owner = String(t.handler || '');
@@ -215,9 +232,16 @@ async function resolveTargetWorklogTasks({ token, mcpUrl, handler, tickets, work
   const out = new Set();
   let checked = 0;
   let failed = 0;
+  // 复用一个 MCP 连接：每个任务都新建连接会握手 N 次，容易把接口打到限流
+  let client = null;
+  try {
+    client = new McpClient(mcpUrl, token);
+    const initErr = mcpError(await client.initialize());
+    if (initErr) client = null;
+  } catch { client = null; }
   for (const tid of candidates) {
     try {
-      const wls = await fetchTaskWorklogs({ token, url: mcpUrl, taskId: tid, useCache });
+      const wls = await fetchTaskWorklogs({ token, url: mcpUrl, taskId: tid, useCache, client });
       const hit = wls.some((w) => (
         targetIds && targetIds.size
           ? targetIds.has(String(w.user_id ?? w.userId ?? ''))
@@ -228,6 +252,7 @@ async function resolveTargetWorklogTasks({ token, mcpUrl, handler, tickets, work
       failed += 1;
     }
     checked += 1;
+    await sleep(120);   // 轻微限速，别把接口打到限流
   }
   console.log(`归属判定：查了 ${checked} 个任务的工时，目标「${handler}」本人有记录的任务 ${out.size} 个`
     + (failed ? `（${failed} 个查失败，按没有处理）` : ''));
