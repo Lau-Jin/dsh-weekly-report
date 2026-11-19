@@ -4,7 +4,11 @@
  * 工单（处理人是我 / 本周期我有工时 / 关联任务我负责）
  * + 任务中心（本周期我有工时 / 本周期新建我负责）+ 子任务补录，最后按 (学校, 事项) 合并。
  */
-import { fetchMyTasks, fetchMyWorklogs, fetchSubtaskTasks, fetchTaskDetails, fetchTicketsViaMcp, fetchWorkdays, myUserIds } from './fetch.mjs';
+import { nameMatches } from './ownership.mjs';
+import {
+  fetchMyTasks, fetchMyWorklogs, fetchSubtaskTasks, fetchTaskDetails, fetchTaskWorklogs,
+  fetchTicketsViaMcp, fetchUserDirectory, fetchWorkdays, myUserIds, resolveSelfName,
+} from './fetch.mjs';
 import {
   buildItemsFromTasks, buildItemsFromTickets, mergeItems, taskChildStats, worklogDates,
 } from './rules.mjs';
@@ -23,7 +27,10 @@ import { makeDate, toDate, todayCn } from './util.mjs';
  * @param {boolean} [opts.useCache]
  * @returns {Promise<object[]>} 合并后的 items
  */
-export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mcpArgs, withTasks = true, useCache = true }) {
+export async function collectItems({
+  token, mcpUrl, handler, ws, we, mcpTool, mcpArgs, withTasks = true, useCache = true,
+  ownershipMode = 'loose',
+}) {
   const t0 = Date.now();
   const { tickets } = await fetchTicketsViaMcp({
     token, url: mcpUrl, toolName: mcpTool, toolArgs: mcpArgs, handlerFilter: handler, useCache,
@@ -38,6 +45,45 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
   const t2 = Date.now();
   const workdays = await fetchWorkdays({ token, url: mcpUrl, start: ws, end: we, useCache });
   const t3 = Date.now();
+
+  // ---- 归属判定（v1.5.0 测试版）----
+  // 账号本人是谁：用我的一条工时 id，到该任务的工时里反查记录人
+  const selfNames = new Set();
+  const selfIds = new Set();
+  const targetIds = new Set();
+  let isSelfReport = !handler;
+  let targetWorklogTasks = new Set();
+  if (ownershipMode !== 'loose') {
+    const dir = await fetchUserDirectory({ token, url: mcpUrl, useCache });
+    const dirByName = new Map();
+    for (const u of dir) {
+      const n = String(u.displayName || u.name || '').trim();
+      if (n && !dirByName.has(n)) dirByName.set(n, String(u.id));
+    }
+    const selfName = await resolveSelfName({ token, url: mcpUrl, worklogs, useCache });
+    if (selfName) {
+      selfNames.add(selfName);
+      const sid = dirByName.get(selfName);
+      if (sid) selfIds.add(sid);
+    }
+    const tid = dirByName.get(String(handler || '').trim());
+    if (tid) targetIds.add(tid);
+    isSelfReport = !handler || (
+      targetIds.size > 0 && selfIds.size > 0
+        ? [...targetIds].some((id) => selfIds.has(String(id)))
+        : [...selfNames].some((n) => nameMatches(handler, n))
+    );
+    console.log(`归属判定：目标「${handler}」${targetIds.size ? `（id ${[...targetIds].join('/')}）` : ''}`
+      + `，账号本人「${selfName || '未知'}」${selfIds.size ? `（id ${[...selfIds].join('/')}）` : ''}`
+      + ` → ${isSelfReport ? '自出模式（我的工时即本人工时）' : '代出模式（需查目标本人的工时）'}`);
+    // 代出场景（目标 ≠ 账号本人）：账号本人的工时不算目标的，
+    // 按任务查「所有人」的工时，判断目标本人是否真在这个任务上干过
+    if (!isSelfReport) {
+      targetWorklogTasks = await resolveTargetWorklogTasks({
+        token, mcpUrl, handler, tickets, worklogs, useCache, targetIds,
+      });
+    }
+  }
   console.log(`[计时] 工单 ${secs(t1 - t0)}s · 工时 ${secs(t2 - t1)}s · 工作日 ${secs(t3 - t2)}s`);
 
   let myTaskIds = new Set();
@@ -63,6 +109,11 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
         workdays,
         skipTaskIds: suppTaskIds,
         childStats,
+        ownershipMode,
+        selfNames,
+        selfIds,
+        targetIds,
+        targetWorklogTasks,
       });
       const covered = new Set(ticketItems.filter((i) => i.task_id).map((i) => String(i.task_id)));
       const wlTaskIds = new Set(worklogs.filter((w) => w.task_id !== undefined && w.task_id !== null).map((w) => String(w.task_id)));
@@ -116,13 +167,22 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
         ticketLinks,
         workdays,
         skipTaskIds: suppTaskIds,
+        ownershipMode,
+        selfNames,
+        selfIds,
+        targetIds,
+        targetWorklogTasks,
       });
     } catch (e) {
       console.log(`提示：任务中心读取失败，本次只按工单生成（${e.message || e}）`);
-      ticketItems = buildItemsFromTickets(tickets, worklogs, handler, ws, we, { workdays });
+      ticketItems = buildItemsFromTickets(tickets, worklogs, handler, ws, we, {
+        workdays, ownershipMode, selfNames, selfIds, targetIds, targetWorklogTasks,
+      });
     }
   } else {
-    ticketItems = buildItemsFromTickets(tickets, worklogs, handler, ws, we, { workdays });
+    ticketItems = buildItemsFromTickets(tickets, worklogs, handler, ws, we, {
+      workdays, ownershipMode, selfNames, selfIds, targetIds, targetWorklogTasks,
+    });
   }
 
   const merged = mergeItems(ticketItems, taskItems);
@@ -131,6 +191,47 @@ export async function collectItems({ token, mcpUrl, handler, ws, we, mcpTool, mc
       + `去重后 ${merged.length}）`);
   }
   return merged;
+}
+
+/**
+ * 代出场景：查「目标处理人本人」在哪些任务上有工时。
+ * 候选任务 = 账号有工时的任务 + 「创建人是目标但处理人不是目标」的工单对应任务；
+ * 逐个按 taskId 查所有人工时（带 6 小时缓存），看有没有目标本人的记录。
+ */
+async function resolveTargetWorklogTasks({ token, mcpUrl, handler, tickets, worklogs, useCache, targetIds }) {
+  const candidates = new Set();
+  for (const w of worklogs) {
+    const tid = String(w.task_id);
+    if (tid && tid !== 'undefined' && tid !== 'null') candidates.add(tid);
+  }
+  for (const t of tickets || []) {
+    const owner = String(t.handler || '');
+    const initiator = String(t.initiator || '');
+    if (nameMatches(initiator, handler) && !nameMatches(owner, handler)) {
+      const tid = String(t.task_id);
+      if (tid && tid !== 'undefined' && tid !== 'null') candidates.add(tid);
+    }
+  }
+  const out = new Set();
+  let checked = 0;
+  let failed = 0;
+  for (const tid of candidates) {
+    try {
+      const wls = await fetchTaskWorklogs({ token, url: mcpUrl, taskId: tid, useCache });
+      const hit = wls.some((w) => (
+        targetIds && targetIds.size
+          ? targetIds.has(String(w.user_id ?? w.userId ?? ''))
+          : nameMatches(w.user_display_name || w.userDisplayName || '', handler)
+      ));
+      if (hit) out.add(tid);
+    } catch {
+      failed += 1;
+    }
+    checked += 1;
+  }
+  console.log(`归属判定：查了 ${checked} 个任务的工时，目标「${handler}」本人有记录的任务 ${out.size} 个`
+    + (failed ? `（${failed} 个查失败，按没有处理）` : ''));
+  return out;
 }
 
 function secs(ms) {

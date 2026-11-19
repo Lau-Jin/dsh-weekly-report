@@ -7,6 +7,7 @@
  *
  * 这里的每一条「口径」都直接影响写进周报/绩效表的内容，改之前先对齐 Python 并跑对照。
  */
+import { classifyOwnership } from './ownership.mjs';
 import { DEFAULT_TASK_LINK } from './config.mjs';
 import {
   fmtRange, isoDate, makeDate, pyRound, stripSchoolPrefix, splitSchool, resolveSchool, toDate, todayCn,
@@ -294,6 +295,18 @@ export function weekMarks(allWls) {
  */
 export function buildItemsFromTickets(tickets, worklogs, handler, ws, we, opts = {}) {
   const myTaskIds = opts.myTaskIds || new Set();
+  // 归属判定上下文（strict 模式下剔除「只是可见、不是我干的」工单）
+  const ownCtx = {
+    handler,
+    mode: opts.ownershipMode || 'loose',
+    selfNames: opts.selfNames || new Set(),
+    selfIds: opts.selfIds || new Set(),
+    targetIds: opts.targetIds || new Set(),
+    myWorklogTasks: new Set((worklogs || []).map((w) => String(w.task_id))),
+    targetWorklogTasks: opts.targetWorklogTasks || new Set(),
+  };
+  const ownStat = new Map();
+  let ownSkipN = 0;
   const childStats = opts.childStats || new Map();
   const workdays = opts.workdays || null;
   const skipTaskIds = opts.skipTaskIds || null;
@@ -323,7 +336,20 @@ export function buildItemsFromTickets(tickets, worklogs, handler, ws, we, opts =
     const pDates = worklogDates(allWls).filter((d) => d >= ws && d <= we);
     const created = toDate(String(t.created_at || '').slice(0, 10));
     const createdInPeriod = Boolean(created && created >= ws && created <= we);
-    const isMine = Boolean(handler) && String(t.handler || '').includes(handler);
+    // 归属判定：处理人是本人 / 本人在这单上有工时 → 算自己的；
+    // 只是创建人、或纯权限可见 → 剔除（v1.5.0 测试版）
+    const own = classifyOwnership({
+      owner: t.handler, initiator: t.initiator, task_id: t.task_id, status: statusRaw,
+      owner_id: t.owner_id, initiator_id: t.initiator_id,
+    }, ownCtx);
+    const isMine = own.mine;
+    ownStat.set(own.reason, (ownStat.get(own.reason) || 0) + 1);
+    // strict：不是「本人干的」一律剔除
+    // （代出场景里账号自己在这单上有工时，但那是账号的工时，不能算到目标名下）
+    if (ownCtx.mode !== 'loose' && !own.mine) {
+      ownSkipN += 1;
+      continue;
+    }
     const taskIsMine = myTaskIds.has(taskId);
     const allDates = worklogDates(allWls);
     // 跨期补创工单（v1.3.1）：本周期新建，但工时日期全在生成跨度之前。
@@ -467,6 +493,17 @@ export function buildItemsFromTickets(tickets, worklogs, handler, ws, we, opts =
 
 /** 任务中心 → 周报条目（对应 build_items_from_tasks） */
 export function buildItemsFromTasks(tasks, worklogs, handler, ws, we, opts = {}) {
+  const ownCtx = {
+    handler,
+    mode: opts.ownershipMode || 'loose',
+    selfNames: opts.selfNames || new Set(),
+    selfIds: opts.selfIds || new Set(),
+    targetIds: opts.targetIds || new Set(),
+    myWorklogTasks: new Set((worklogs || []).map((w) => String(w.task_id))),
+    targetWorklogTasks: opts.targetWorklogTasks || new Set(),
+  };
+  const ownStat = new Map();
+  let ownSkipN = 0;
   const covered = new Set([...(opts.coveredTaskIds || [])].filter(Boolean).map(String));
   const skipTasks = new Set([...(opts.skipTaskIds || [])].filter(Boolean).map(String));
   const ticketLinks = new Map(Object.entries(opts.ticketLinks || {}).filter(([, v]) => v));
@@ -504,6 +541,16 @@ export function buildItemsFromTasks(tasks, worklogs, handler, ws, we, opts = {})
       continue;
     }
     const isOwner = String(t.is_owner ?? t.isOwner ?? '') === '1';
+    const own = classifyOwnership({
+      owner: t.owner_name || t.ownerName || t.assignee_name || '',
+      initiator: t.initiator_name || t.initiatorName || '',
+      task_id: t.id ?? t.taskId,
+    }, { ...ownCtx, selfOwnedTasks: isOwner ? new Set([String(t.id ?? t.taskId)]) : new Set() });
+    if (ownCtx.mode !== 'loose' && !own.mine) {
+      ownSkipN += 1;
+      continue;
+    }
+    ownStat.set(own.reason, (ownStat.get(own.reason) || 0) + 1);
     const allWls = byTask.get(tid) || [];
     const allDates = worklogDates(allWls);
     const pDates = allDates.filter((d) => d >= ws && d <= we);

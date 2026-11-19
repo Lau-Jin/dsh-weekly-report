@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报工作台</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=1.4.1">
+  <link rel="stylesheet" href="/style.css?v=1.5.0">
 </head>
 <body>
   <div class="ws-app">
@@ -191,6 +191,7 @@
                 <button class="ws-btn ws-btn--ghost" id="btn-perf-layout" type="button">检测表格结构</button>
               </div>
               <div class="ws-field__note" id="perf-layout-hint">先检测一次，确认要写的位置对不对</div>
+              <label class="ws-switch ws-switch--inline"><input type="checkbox" id="f-ownership-strict"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>严格归属判定</b><small>开启后剔除「只是可见、不是我干的」工单：创建人是本人但处理人与工时都不是本人的、纯权限可见的、代别人出周报时账号自己的工时（测试版，默认关闭）</small></span><em class="ws-switch__state"></em></label>
               <label class="ws-switch ws-switch--inline"><input type="checkbox" id="f-perf-insert"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>允许自动扩展行</b><small>默认开启。明细区写满时自动下移考核区块插行（不丢条目、样式不变）；关掉则不改动表格结构，只在报告里提示超出多少条</small></span><em class="ws-switch__state"></em></label>
               <div class="ws-output" id="perf-layout-output" hidden></div>
             </div>
@@ -331,6 +332,6 @@
   </div>
 
   <div class="ws-toast" id="toast" hidden></div>
-  <script src="/app.js?v=1.4.1"></script>
+  <script src="/app.js?v=1.5.0"></script>
 </body>
 </html>

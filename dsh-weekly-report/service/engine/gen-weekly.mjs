@@ -299,10 +299,12 @@ async function main() {
     if (me > spanEnd) spanEnd = me;
   }
 
+  const ownershipMode = (cfg.ownership && cfg.ownership.mode) || 'loose';
   const allItems = await collectItems({
     token, mcpUrl, handler, ws: spanStart, we: spanEnd,
     mcpTool: args.mcpTool, mcpArgs: dataArgs,
     withTasks: !args.noTasks, useCache: !args.noCache,
+    ownershipMode,
   });
   console.log(`已采集 ${isoDate(spanStart)} ~ ${isoDate(spanEnd)}：${allItems.length} 条`);
 
@@ -401,6 +403,7 @@ function listMonthsWithReports(outDir) {
         const extra = await collectItems({
           token, mcpUrl, handler, ws: ms, we: me,
           mcpTool: args.mcpTool, mcpArgs: dataArgs, withTasks: !args.noTasks, useCache: !args.noCache,
+          ownershipMode: (cfg.ownership && cfg.ownership.mode) || 'loose',
         });
         const have = new Set(mItems.map((i) => `${i.school}\u0000${i.subject}`));
         for (const i of extra) {

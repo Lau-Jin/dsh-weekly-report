@@ -8,7 +8,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_LINK, DEFAULT_MCP_URL, ENGINE_DIR, TASK_DETAIL_TOOL, TASK_LIST_TOOL } from './config.mjs';
+import {
+  DEFAULT_LINK, DEFAULT_MCP_URL, ENGINE_DIR, TASK_DETAIL_TOOL, TASK_LIST_TOOL, TASK_WORKLOG_TOOL, USER_LIST_TOOL,
+} from './config.mjs';
 import { McpClient, callWithRetry, mcpError, pickTicketTool, toolTexts } from './mcp.mjs';
 import { isoDate, splitSchool, toDate } from './util.mjs';
 import { TASK_DONE_STATUSES } from './rules.mjs';
@@ -80,6 +82,10 @@ export function normalizeTickets(rawList) {
       title: title ? String(title).trim() : '',
       link: link ? String(link).trim() : '',
       handler: handler ? String(handler).trim() : '',
+      // 创建人（归属判定要用：只是我创建/报障、别人在处理的不算我的活儿）
+      initiator: String(pickRaw(it, 'initiatorName', 'initiator', 'creatorName', 'creator', '创建人', '报障人', 'submitterName', 'submitter') || '').trim(),
+      initiator_id: pickRaw(it, 'initiatorUserId', 'initiatorId', 'creatorId', '创建人ID') || '',
+      owner_id: pickRaw(it, 'ownerUserId', 'ownerId', '处理人ID') || '',
       school: school ? String(school).trim() : '',
       status: String(pickRaw(it, 'ticketStatus', 'status') || '').trim(),
       task_id: pickRaw(it, 'taskId', 'task_id'),
@@ -201,6 +207,86 @@ export async function fetchTicketsViaMcp({ token, url = DEFAULT_MCP_URL, toolNam
       + '（匹配时本人优先，未命中再比对全部）');
   }
   return { tickets, tools };
+}
+
+/**
+ * 用户目录（id ↔ 姓名），对应 meta_list_users。
+ * 姓名可能有歧义，归属判定优先用 user id 精确比对。缓存 6 小时。
+ */
+export async function fetchUserDirectory({ token, url = DEFAULT_MCP_URL, useCache = true, client: given }) {
+  if (useCache) {
+    const hit = cacheRead('user_dir', 6 * 3600 * 1000);
+    if (hit !== null) return hit;
+  }
+  const client = given || new McpClient(url, token);
+  if (!given) {
+    const initErr = mcpError(await client.initialize());
+    if (initErr) return [];
+  }
+  const out = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const resp = await callWithRetry(client, USER_LIST_TOOL, { page, limit: 100 });
+    const err = mcpError(resp);
+    if (err) break;
+    let data = {};
+    try { data = JSON.parse(toolTexts(resp)); } catch { break; }
+    const items = data.items || data.users || [];
+    out.push(...items);
+    const total = data.total;
+    if (!items.length || (Number.isInteger(total) && out.length >= total) || items.length < 100) break;
+    page += 1;
+  }
+  if (useCache) cacheWrite('user_dir', out);
+  return out;
+}
+
+/**
+ * 账号本人是谁：用「我的一条工时 id」到该任务的工时里反查记录人。
+ * （task_list_my_worklogs 不返回记录人，只有任务工时里才有 user_display_name）
+ */
+export async function resolveSelfName({ token, url = DEFAULT_MCP_URL, worklogs, useCache = true }) {
+  const wl = (worklogs || [])[0];
+  if (!wl || wl.id === undefined || wl.id === null) return '';
+  try {
+    const wls = await fetchTaskWorklogs({ token, url, taskId: wl.task_id, useCache });
+    const hit = wls.find((w) => String(w.id) === String(wl.id));
+    return String((hit && (hit.user_display_name || hit.userDisplayName)) || '');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 某个任务上**所有人**的工时（对应 task_list_task_worklogs）。
+ * 代别人出周报时，要靠它判断「目标处理人本人有没有在这个任务上干过活」。
+ * 缓存 6 小时（工时变动不频繁，避免重复调用）。
+ */
+export async function fetchTaskWorklogs({ token, url = DEFAULT_MCP_URL, taskId, useCache = true, client: given }) {
+  if (!taskId) return [];
+  if (useCache) {
+    const hit = cacheRead(`task_wl_${taskId}`, 6 * 3600 * 1000);
+    if (hit !== null) return hit;
+  }
+  // 复用调用方的连接（批量查时避免每个任务都重新握手）
+  const client = given || new McpClient(url, token);
+  if (!given) {
+    const initErr = mcpError(await client.initialize());
+    if (initErr) throw new Error(`MCP 初始化失败：${initErr}`);
+  }
+  const out = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const resp = await callWithRetry(client, TASK_WORKLOG_TOOL, { taskId: Number(taskId), page, limit: 50 });
+    const err = mcpError(resp);
+    if (err) break;
+    let data = {};
+    try { data = JSON.parse(toolTexts(resp)); } catch { break; }
+    const items = data.items || data.worklogs || [];
+    out.push(...items);
+    if (!items.length || items.length < 50) break;
+    page += 1;
+  }
+  if (useCache) cacheWrite(`task_wl_${taskId}`, out);
+  return out;
 }
 
 /** 我在区间内的工时记录（对应 fetch_my_worklogs，缓存 10 分钟） */

@@ -16,6 +16,10 @@ export const DEFAULT_MCP_URL = 'https://yanfa.scedu.tech/api/mcp';
 export const DEFAULT_LINK = 'https://yanfa.scedu.tech/?tab=ticket-detail&ticketId={id}';
 export const DEFAULT_TASK_LINK = 'https://yanfa.scedu.tech/?tab=task-detail&taskId={id}';
 export const TASK_LIST_TOOL = 'task_list_my_tasks';
+/** 用户目录（id ↔ 姓名），归属判定用 */
+export const USER_LIST_TOOL = 'meta_list_users';
+/** 按任务查所有人���时的工具（归属判定用） */
+export const TASK_WORKLOG_TOOL = 'task_list_task_worklogs';
 export const TASK_DETAIL_TOOL = 'task_get_task_detail';
 
 /**
