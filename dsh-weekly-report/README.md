@@ -1,4 +1,4 @@
-# 周报工作台 · dsh-weekly-report v1.6.2
+# 周报工作台 · dsh-weekly-report v1.6.3
 
 **装上即用的 DSH 插件**：自动注册 bundle、自动常驻面板服务、自动打开面板，全程不用敲命令。
 使用者提供 API Key、输出目录、绩效表与模板，插件负责识别并据此生成周报与绩效表。
@@ -13,7 +13,7 @@
    ```bash
    pnpm add dsh-weekly-report-lau
    ```
-   或编辑 `package.json` 的 `dependencies` 加入 `"dsh-weekly-report-lau": "^1.6.2"` 后 `pnpm install`。
+   或编辑 `package.json` 的 `dependencies` 加入 `"dsh-weekly-report-lau": "^1.6.3"` 后 `pnpm install`。
 2. bundle 由包内 `cordis.patch.yml` 自动挂载；宿主心跳每 20 秒保活、挂了自动拉起；面板地址 `http://127.0.0.1:8798/`。
 3. **不需要重启 DSH**：新包就位后，宿主下一次心跳（≤20 秒）即拉起新版本面板。
 
