@@ -315,6 +315,66 @@ try {
     fs.rmSync(f1, { force: true });
     fs.rmSync(f2, { force: true });
   }
+
+  // v1.8.1 扩行格式保真：真实模板的明细区有全边框、考核区块有跨行合并与内容，
+  // 下移后必须原样保留；新增行必须从明细区样例行逐格复制（含从属格），不能缺边框/被清空。
+  {
+    const f3 = path.join(DATA, 'smoke-perf-format-tpl.xlsx');
+    const f4 = path.join(DATA, 'smoke-perf-format-out.xlsx');
+    const wb3 = new ExcelJS.Workbook();
+    const ws3 = wb3.addWorksheet('月度考核');
+    ws3.getCell('B2').value = '员工月度考核表'; ws3.mergeCells('B2:N2');
+    ws3.getCell('B3').value = '被考评人'; ws3.mergeCells('B3:C3'); ws3.getCell('D3').value = '测试';
+    ws3.getCell('B4').value = '考评时间'; ws3.mergeCells('B4:C4'); ws3.getCell('D4').value = '2026年11月1日-11月30日';
+    for (const [c, v] of Object.entries({ B: '类别', D: '任务名称', J: '开始时间', K: '结束时间', L: '是否完成', M: '评定' })) ws3.getCell(`${c}6`).value = v;
+    ws3.mergeCells('D6:I6'); ws3.mergeCells('M6:N6');
+    const EDGE = { style: 'thin', color: { argb: 'FF000000' } };
+    const BORDER = { top: EDGE, left: EDGE, bottom: EDGE, right: EDGE };
+    for (let r = 7; r <= 11; r += 1) {
+      ws3.mergeCells(`B${r}:C${r}`); ws3.mergeCells(`D${r}:I${r}`); ws3.mergeCells(`M${r}:N${r}`);
+      for (let c = 2; c <= 14; c += 1) ws3.getCell(r, c).border = BORDER;
+    }
+    ws3.getCell('B12').value = '工作任务考核（60%）：'; ws3.mergeCells('B12:N12');
+    // 下移区：标题 + 跨行合并的序号/指标/权重 + 具体内容（截图里被置空的那块）
+    ws3.getCell('B18').value = '工作绩效考核（30%）：'; ws3.mergeCells('B18:N18');
+    ws3.getCell('B19').value = '1'; ws3.mergeCells('B19:B20');
+    ws3.getCell('C19').value = '交付部署'; ws3.getCell('C20').value = '项目支撑';
+    ws3.getCell('D19').value = '部署工作完成情况评定'; ws3.mergeCells('D19:I20');
+    ws3.getCell('M19').value = '30'; ws3.mergeCells('M19:N20');
+    ws3.getCell('B25').value = '品质与态度考核（10%）：'; ws3.mergeCells('B25:N25');
+    await wb3.xlsx.writeFile(f3);
+
+    const items6 = Array.from({ length: 6 }, (_, i) => ({
+      school: '示例学院', subject: `扩行事项${i}`, category: '项目运维',
+      d1: new Date(2026, 10, 3), d2: new Date(2026, 10, 3), settled: true, note: '',
+    }));
+    const built = await perf.buildPerfXlsx({
+      templatePath: f3, outPath: f4, items: items6, year: 2026, month: 11,
+      handler: '测试', allowInsert: true, log: () => {},
+    });
+    ok('扩行格式保真：确实扩了 1 行落盘', built && built.added === 6 && fs.existsSync(f4), '');
+    const book3 = await xlsx.readWorkbook(f4);
+    const sh3 = perf.perfSheetOf(book3);
+    const m3 = xlsx.mergeTexts(sh3);
+    // ① 新增行 12~14：每列（含 M:N 从属格 N）都有与明细区一致的边框
+    const bordered = [12].every((r) => [2, 4, 10, 11, 12, 13, 14].every((c) => {
+      const b = sh3.getCell(r, c).border || {};
+      return b.top && b.top.style === 'thin' && b.bottom && b.bottom.style === 'thin';
+    }));
+    ok('新增行边框完整（含原被跳过的 N 列从属格）', bordered, '');
+    ok('新增行按明细区复制了三段合并', [12].every((r) =>
+      m3.has(`B${r}:C${r}`) && m3.has(`D${r}:I${r}`) && m3.has(`M${r}:N${r}`)), '');
+    // ② 下移后的考核区块：内容与跨行合并区原样保留，没有空白/清空
+    ok('考核区块标题下移且未清空', String(sh3.getCell(19, 2).value || '').includes('工作绩效考核'), '');
+    ok('考核指标具体内容未清空', String(sh3.getCell(20, 3).value || '').includes('交付部署')
+      && String(sh3.getCell(21, 3).value || '').includes('项目支撑')
+      && String(sh3.getCell(20, 4).value || '').includes('部署工作完成情况'), '');
+    ok('权重列未被置空', String(sh3.getCell(20, 13).value || '') === '30', '');
+    ok('跨行合并区完整下移（序号/指标/权重）',
+      m3.has('B20:B21') && m3.has('D20:I21') && m3.has('M20:N21'), '');
+    ok('品质与态度区块也完整下移', String(sh3.getCell(26, 2).value || '').includes('品质与态度'), '');
+    fs.rmSync(f3, { force: true }); fs.rmSync(f4, { force: true });
+  }
   ok('未完成事项结束时间取本周周日', (() => {
     const monday = new Date(2026, 10, 9); // 2026-11-09 周一
     return monday.getDay() === 1 && weekEndOf(monday).getDate() === 15 && weekEndOf(monday).getDay() === 0;

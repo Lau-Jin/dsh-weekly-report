@@ -576,7 +576,9 @@ export async function buildPerfXlsx(opts) {
 
   if (rows.length > layout.cap && allowInsert) {
     const need = rows.length - layout.cap;
-    insertRowsAt(ws, layout.secRow, need);
+    // 新增行的样式来源固定为「明细区首行」（标准样例行）：逐格复制边框/字体/合并区，
+    // 不再借用区块标题行或硬编码列段，确保扩出来的行与模板记录区格式完全一致。
+    insertRowsAt(ws, layout.secRow, need, { styleFromRow: start });
     // 插行之后区块下移了，**必须重新识别版式**：否则写入仍按旧容量算，
     // 多出来的那几条会被悄悄丢掉（v1.3.8 修）
     const fresh = detectPerfLayout(ws);

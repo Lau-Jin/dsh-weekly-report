@@ -314,59 +314,80 @@ export function setCell(row, col, value, styleFrom, opts = {}) {
 }
 
 /**
- * 在 atRow 处插入 n 行（对应 _shift_rows_down(1963)）：
- * 整体下移值/样式/行高/合并区，插入出来的空行沿用上方数据行的样式，
- * 并补上模板里 B:C / D:I / M:N 这三段合并。
+ * 在 atRow 处插入 n 行（对应 _shift_rows_down(1963)）。
+ *
+ * v1.8.1 修复：旧实现「边复制边判断合并从属格」，而合并区尚未下移，
+ * 目标格若落在旧合并区内就会被整格跳过（值丢失）；随后 merge 又会把
+ * 从属格的样式覆盖，导致下移后的考核区块出现空白/缺边框。改为：
+ *   ① 先快照受影响区域所有格子的值/样式（含从属格）与行高、全部合并区；
+ *   ② 解除受影响合并区 → ③ 从下往上整块写入目标位置（每格值+样式都覆盖）；
+ *   ④ 重建下移后的合并区；
+ *   ⑤ 新增行从「明细区样例行」逐格复制样式与行高，并复制该行的合并区，
+ *      不再硬编码 B:C / D:I / M:N，也不再跳过从属格 → 边框与模板完全一致。
+ * 只动插入点及以下的行；插入点以上的标题/信息区原封不动。
+ *
+ * @param {object} [opts] opts.styleFromRow 指定新增行的样式来源行（默认 atRow-1）
  */
-export function insertRowsAt(ws, atRow, count) {
+export function insertRowsAt(ws, atRow, count, opts = {}) {
   const n = Math.trunc(count);
   if (!n || n < 1) return;
   const maxRow = ws.rowCount;
   const maxCol = ws.columnCount;
   if (maxRow < atRow) return;
 
-  // ① 值 + 样式 整体下移（从下往上，避免覆盖）
-  for (let r = maxRow; r >= atRow; r -= 1) {
-    const srcRow = ws.getRow(r);
-    const dstRow = ws.getRow(r + n);
+  // ① 快照：受影响行（含合并从属格）的值 / 样式 / 行高，以及全部合并区
+  const snap = [];
+  for (let r = atRow; r <= maxRow; r += 1) {
+    const row = ws.getRow(r);
+    const cells = [];
     for (let c = 1; c <= maxCol; c += 1) {
-      if (isMergedSlave(ws, r + n, c)) continue; // openpyxl：dst 是从属格 → 整格跳过
-      const src = srcRow.getCell(c);
-      const dst = dstRow.getCell(c);
-      if (!isMergedSlave(ws, r, c)) dst.value = cloneValue(src.value);
-      const style = cloneStyle(src.style);
-      if (style) dst.style = style;
+      const cell = row.getCell(c);
+      cells.push({ value: cloneValue(cell.value), style: cloneStyle(cell.style) });
     }
-    const h = srcRow.height;
-    if (h) dstRow.height = h;
+    snap.push({ r, cells, height: row.height });
+  }
+  const merges = listMerges(ws).map((m) => ({ top: m.top, left: m.left, bottom: m.bottom, right: m.right }));
+
+  // ② 先解除所有涉及插入点以下的合并区，避免写入时被"从属格"判定跳过
+  for (const m of merges) {
+    if (m.bottom < atRow) continue;
+    try { ws.unMergeCells(m.top, m.left, m.bottom, m.right); } catch { /* 已解除 */ }
   }
 
-  // ② 合并区整体下移（起点在插入点之后的）
-  const moved = listMerges(ws).filter((m) => m.top >= atRow);
-  for (const m of moved) {
-    try {
-      ws.unMergeCells(m.top, m.left, m.bottom, m.right);
-    } catch { /* 已经不在合并里 */ }
-  }
-  for (const m of moved) {
-    try {
-      ws.mergeCells(m.top + n, m.left, m.bottom + n, m.right);
-    } catch { /* 冲突就跳过，与 Python 的 try/except 一致 */ }
+  // ③ 从下往上整块写入：每个格子都覆盖值与样式（从属格样式也保留，merge 会再统一）
+  for (let i = snap.length - 1; i >= 0; i -= 1) {
+    const s = snap[i];
+    const dstRow = ws.getRow(s.r + n);
+    for (let c = 1; c <= maxCol; c += 1) {
+      const cell = dstRow.getCell(c);
+      const info = s.cells[c - 1];
+      cell.value = info.value;
+      cell.style = info.style;
+    }
+    if (s.height) dstRow.height = s.height;
   }
 
-  // ③ 插入出来的空行：清空值，样式沿用上方那一行
+  // ④ 重建合并区：起点在插入点之后的整块下移 n 行
+  for (const m of merges) {
+    const top = m.top >= atRow ? m.top + n : m.top;
+    const bottom = m.bottom >= atRow ? m.bottom + n : m.bottom;
+    try { ws.mergeCells(top, m.left, bottom, m.right); } catch { /* 冲突跳过 */ }
+  }
+
+  // ⑤ 新增行：从样例行逐格复制（含每一列的边框样式），并复制样例行的合并区
+  const sample = Math.trunc(opts.styleFromRow || atRow - 1);
+  const sampleRow = ws.getRow(sample);
+  const sampleMerges = merges.filter((m) => m.top === sample && m.bottom === sample);
   for (let r = atRow; r < atRow + n; r += 1) {
+    const dstRow = ws.getRow(r);
     for (let c = 1; c <= maxCol; c += 1) {
-      if (isMergedSlave(ws, r, c)) continue;
-      const cell = ws.getCell(r, c);
-      const style = cloneStyle(ws.getCell(atRow - 1, c).style);
+      const cell = dstRow.getCell(c);
       cell.value = null;
-      if (style) cell.style = style;
+      cell.style = cloneStyle(sampleRow.getCell(c).style);
     }
-    for (const [l, r2] of [['B', 'C'], ['D', 'I'], ['M', 'N']]) {
-      try {
-        ws.mergeCells(`${l}${r}:${r2}${r}`);
-      } catch { /* 已合并或冲突 */ }
+    if (sampleRow.height) dstRow.height = sampleRow.height;
+    for (const m of sampleMerges) {
+      try { ws.mergeCells(r, m.left, r, m.right); } catch { /* 已合并 */ }
     }
   }
 }
