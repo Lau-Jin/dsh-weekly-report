@@ -415,6 +415,8 @@ input::placeholder, textarea::placeholder { color: #b3bac7; }
 .ws-tpl-row__badge { font-size: 10.5px; padding: 2px 8px; border-radius: 20px; background: #eef1f6; color: var(--text-3); white-space: nowrap; }
 .ws-tpl-row__btn { font-size: 11.5px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text-2); cursor: pointer; }
 .ws-tpl-row__btn:hover { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
+.ws-tpl-row__btn--edit:hover, .ws-tpl-row__btn--edit.is-on { color: var(--text); border-color: var(--line-2, #b9c2d0); }
+#f-tpl-edit-text { margin: 8px 0; }
 #tpl-picker .ws-switch { padding: 7px 0; }
 
 @media (prefers-reduced-motion: reduce) {

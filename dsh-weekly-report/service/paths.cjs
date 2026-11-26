@@ -118,6 +118,7 @@ function defaultConfig() {
       hour: 12,
       minute: 0,
       perfAuto: true,  // 定时生成时同步写入绩效表（提供目录才写）
+      strictPeriod: false, // 定时生成是否只统计所选周期内开始的事项（与生成页开关同效）
     },
     confirm: { send_mail: false, imap_host: '', imap_port: 993, lookback_days: 14, subject_keyword: '周报' },
     notify: {

@@ -93,8 +93,14 @@ function scheduledFire(now) {
   sched.lastSlot = slot;
   writeSchedState({ lastSlot: slot });
   const sc = P.loadConfig().config.schedule || {};
-  P.log(`schedule: fire ${slot} weekday=${sc.weekday} perfAuto=${sc.perfAuto ? 1 : 0}`);
-  const r = startRun({ period: 'current', perfAuto: Boolean(sc.perfAuto), scheduled: true });
+  P.log(`schedule: fire ${slot} weekday=${sc.weekday} perfAuto=${sc.perfAuto ? 1 : 0} strictPeriod=${sc.strictPeriod ? 1 : 0}`);
+  // 与生成页同一套参数：定时生成也遵守「仅本周期事项」开关（默认关闭=逐周叠加）。
+  const r = startRun({
+    period: 'current',
+    perfAuto: Boolean(sc.perfAuto),
+    strictPeriod: Boolean(sc.strictPeriod),
+    scheduled: true,
+  });
   sched.lastRunAt = new Date().toISOString();
   sched.lastResult = r.ok ? 'started' : String(r.error || 'failed');
   if (!r.ok) P.log(`schedule: trigger rejected: ${r.error || '未知原因'}`);

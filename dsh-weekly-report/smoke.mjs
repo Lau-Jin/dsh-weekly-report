@@ -73,10 +73,12 @@ try {
   const saved = await post('/api/config', { config: {
     handler: '测试同事', out_dir: path.join(DATA, 'out'), folder: '',
     mcp_url: 'https://example.invalid/api/mcp', threshold: 0.9,
+    schedule: { strictPeriod: true },
   } });
   ok('配置保存', saved.body.ok === true, '');
   const st2 = await req('/api/state');
   ok('配置生效', st2.body.config.handler === '测试同事' && st2.body.config.threshold === 0.9, '');
+  ok('定时严格时间开关可保存并读取', st2.body.config.schedule && st2.body.config.schedule.strictPeriod === true, '');
   ok('输出目录为空字符串以外才归一', typeof st2.body.config.out_dir === 'string' && path.isAbsolute(st2.body.config.out_dir), '');
 
   const keySaved = await post('/api/api-key', { key: 'sk-smoke-test-123456' });
@@ -94,18 +96,33 @@ try {
   const tplList0 = await req('/api/templates');
   ok('模板清单始终含内置格式', tplList0.body.ok === true
     && tplList0.body.templates.some((t) => t.id === 'builtin' && t.builtin === true), '');
-  const tplNew = await post('/api/templates', {
-    id: 'smokeFmt', name: '冒烟简版', text: '【{{category}}】\n  时间: {{time}}\n  事项: {{subject}}\n',
-  });
+  const tplTextA = '【A版】\n  时间: {{time}}\n  事项: {{subject}}\n';
+  const tplTextB = '== B版 ==\n  项目: {{category}}\n  事项: {{subject}}\n';
+  const tplNew = await post('/api/templates', { id: 'smokeFmt', name: '冒烟A版', text: tplTextA });
   ok('新增自定义格式', tplNew.body.ok === true && tplNew.body.template.id === 'smokeFmt', '');
+  const tplNew2 = await post('/api/templates', { id: 'smokeFmt2', name: '冒烟B版', text: tplTextB });
+  ok('新增第二套格式（独立正文）', tplNew2.body.ok === true, '');
   const tplRead = await req('/api/templates/smokeFmt');
+  const tplRead2 = await req('/api/templates/smokeFmt2');
   ok('按 id 读取格式正文', tplRead.body.ok === true && /\{\{subject\}\}/.test(tplRead.body.text), '');
+  ok('两套格式正文互不相同（不是改名复用）', tplRead.body.text.includes('A版')
+    && tplRead2.body.text.includes('B版') && tplRead.body.text !== tplRead2.body.text, '');
+  const { renderReport: renderFmt } = await import('./service/engine/lib/render.mjs');
+  const sample = [{ category: '运维', school: '示例', subject: '同一工单', time: '2026年11月6日',
+    work: 'w', note: '无', progress: '80%' }];
+  const outA = renderFmt(sample, tplRead.body.text);
+  const outB = renderFmt(sample, tplRead2.body.text);
+  ok('同一事项按两套正文渲染出不同周报', outA.includes('A版') && outB.includes('B版')
+    && !outA.includes('B版') && !outB.includes('A版'), '各用各的模板');
   const tplList1 = await req('/api/templates');
-  ok('新增后清单可见', tplList1.body.templates.some((t) => t.id === 'smokeFmt'), '');
-  const tplDel = await fetch(BASE + '/api/templates/smokeFmt', { method: 'DELETE' });
-  const tplDelBody = await tplDel.json();
-  ok('删除自定义格式', tplDelBody.ok === true
-    && !(await req('/api/templates')).body.templates.some((t) => t.id === 'smokeFmt'), '');
+  ok('新增后清单可见', tplList1.body.templates.some((t) => t.id === 'smokeFmt')
+    && tplList1.body.templates.some((t) => t.id === 'smokeFmt2'), '');
+  for (const id of ['smokeFmt', 'smokeFmt2']) {
+    const r = await fetch(BASE + '/api/templates/' + id, { method: 'DELETE' });
+    const b = await r.json();
+    ok('删除自定义格式 ' + id, b.ok === true
+      && !(await req('/api/templates')).body.templates.some((t) => t.id === id), '');
+  }
   const tplBuiltinDel = await fetch(BASE + '/api/templates/builtin', { method: 'DELETE' });
   ok('内置格式不可删除', (await tplBuiltinDel.json()).ok === false, '');
 
@@ -322,7 +339,7 @@ try {
   ok('定时生成有内置默认配置', /schedule:\s*\{[\s\S]*?enabled:\s*false[\s\S]*?weekday:\s*6[\s\S]*?hour:\s*12/.test(pathsText), '默认周六 12:00，关闭');
   ok('服务端内置调度器', /function scheduleTick/.test(srvText) && /setInterval\(scheduleTick/.test(srvText) && /startScheduler\(\)/.test(srvText), '不依赖外部计划任务');
   ok('定时触发的分钟槽会持久化去重', /SCHEDULE_STATE_FILE/.test(srvText) && /writeSchedState/.test(srvText), '');
-  ok('定时触发复用 startRun 校验', /startRun\(\{\s*period:\s*'current',\s*perfAuto:\s*Boolean\(sc\.perfAuto\),\s*scheduled:\s*true\s*\}\)/.test(srvText), '');
+  ok('定时触发复用 startRun 校验', /startRun\(\{\s*period:\s*'current',\s*perfAuto:\s*Boolean\(sc\.perfAuto\),\s*strictPeriod:\s*Boolean\(sc\.strictPeriod\),\s*scheduled:\s*true,?\s*\}\)/.test(srvText), '');
   ok('state 接口返回下次运行时间', /nextRunAt/.test(srvText) && /computeNextRun/.test(srvText), '');
   ok('设置页有定时生成卡片', ['f-schedule-enabled', 'f-schedule-day', 'f-schedule-time', 'f-schedule-perf', 'schedule-next-hint'].every((id) => htmlText.includes(`id="${id}"`)), '');
   ok('左下角展示跟随定时配置', htmlText.includes('id="nav-schedule-hint"') && /renderSchedule/.test(jsText) && /定时：每周/.test(jsText), '');
@@ -465,6 +482,21 @@ try {
     && /args\.templates/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8')), '');
   ok('多模板逐套渲染并命名文件', /formatId:\s*fmt\.id/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8'))
     && /'__' \+ fmt\.id \+ '\.txt'/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8')), '');
+
+  // v1.8.0 逐套编辑 + 定时任务严格时间
+  ok('生成页开关改名为「仅本周期事项」', htmlText.includes('仅本周期事项')
+    && !htmlText.includes('绝对按指定时间计算'), '');
+  ok('模板逐套编辑界面（编辑/另存/独立正文框）', htmlText.includes('id="f-tpl-edit-text"')
+    && htmlText.includes('id="btn-tpl-saveas"') && !htmlText.includes('从当前内容新增格式')
+    && /data-edit=/.test(jsText) && /btn-tpl-saveas/.test(jsText), '');
+  const serverText = fs.readFileSync(path.join(HERE, 'service', 'server.cjs'), 'utf8');
+  ok('定时任务配置含 strictPeriod 且默认关闭', /strictPeriod:\s*false/.test(pathsText), '');
+  ok('定时任务把 strictPeriod 传入 startRun',
+    /function scheduledFire[\s\S]*?strictPeriod:\s*Boolean\(sc\.strictPeriod\)/.test(serverText), '');
+  ok('定时严格开关可保存与回填',
+    /strictPeriod:\s*\$\('#f-schedule-strict'\)\.checked/.test(jsText)
+    && /\$\('#f-schedule-strict'\)\.checked = Boolean\(sc\.strictPeriod\)/.test(jsText)
+    && htmlText.includes('id="f-schedule-strict"'), '');
 
   const plugin = JSON.parse(fs.readFileSync(path.join(HERE, 'plugin.json'), 'utf8'));
   ok('plugin.json 声明装上即用', plugin.automatic.autoRegisterBundle === true && plugin.automatic.autoStartService === true, '');

@@ -12,6 +12,7 @@
   const S = {
     state: null, view: 'overview', period: 'current', reports: [],
     selected: '', fsTarget: '', fsPath: '', runTimer: 0, tplText: '', reportText: '',
+    tplEditId: null, tplSelection: [],
   };
 
   async function api(url, options) {
@@ -218,6 +219,7 @@
     $('#f-schedule-day').value = String(sc.weekday ?? 6);
     $('#f-schedule-time').value = `${String(sc.hour ?? 12).padStart(2, '0')}:${String(sc.minute ?? 0).padStart(2, '0')}`;
     $('#f-schedule-perf').checked = sc.perfAuto !== false;
+    $('#f-schedule-strict').checked = Boolean(sc.strictPeriod);
     renderSchedule(st);
     $('#f-notify').checked = Boolean(c.notify && c.notify.enabled);
     $('#smtp-box').hidden = !$('#f-notify').checked;
@@ -335,14 +337,35 @@
       manage.innerHTML = list.map((t) =>
         `<div class="ws-tpl-row"><span class="ws-tpl-row__name">${esc(t.name)}</span>`
         + `<span class="ws-tpl-row__badge">${t.builtin ? '内置' : '自定义'}</span>`
+        + `<button class="ws-tpl-row__btn ws-tpl-row__btn--edit${S.tplEditId === t.id ? ' is-on' : ''}" type="button" data-edit="${esc(t.id)}">${t.builtin ? '查看' : '编辑'}</button>`
         + (t.builtin ? '' : `<button class="ws-tpl-row__btn" type="button" data-del="${esc(t.id)}">删除</button>`)
         + `</div>`
       ).join('');
+      // 每套格式有独立正文：点「编辑 / 查看」读回该格式自己的内容，改完单独保存。
+      $$('#tpl-manage [data-edit]').forEach((btn) => btn.addEventListener('click', async () => {
+        const id = btn.dataset.edit;
+        const r = await api(`/api/templates/${encodeURIComponent(id)}`);
+        if (!r.ok) { toast(r.error || '读取格式失败', 'err'); return; }
+        S.tplEditId = id;
+        $('#f-tpl-edit-name').value = (r.template && r.template.name) || '';
+        $('#f-tpl-edit-text').value = r.text || '';
+        const hint = $('#tpl-edit-hint');
+        if (hint) hint.textContent = r.template && r.template.builtin
+          ? '内置只读 · 可另存为新格式' : `正在编辑「${r.template ? r.template.name : id}」`;
+        $$('#tpl-manage [data-edit]').forEach((b) => b.classList.toggle('is-on', b === btn));
+      }));
       $$('#tpl-manage [data-del]').forEach((btn) => btn.addEventListener('click', async () => {
         const id = btn.dataset.del;
         if (!confirm('删除这套周报格式？')) return;
         const rr = await api(`/api/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!rr.ok) { toast(rr.error || '删除失败', 'err'); return; }
+        if (S.tplEditId === id) {
+          S.tplEditId = null;
+          $('#f-tpl-edit-name').value = '';
+          $('#f-tpl-edit-text').value = '';
+          const hint = $('#tpl-edit-hint');
+          if (hint) hint.textContent = '逐套编辑各自的正文';
+        }
         toast('已删除'); S.tplSelection = []; await loadTemplates();
       }));
     }
@@ -364,6 +387,7 @@
         hour: Number(($('#f-schedule-time').value || '12:00').split(':')[0]),
         minute: Number(($('#f-schedule-time').value || '12:00').split(':')[1]),
         perfAuto: $('#f-schedule-perf').checked,
+        strictPeriod: $('#f-schedule-strict').checked,
       },
       notify: {
         enabled: $('#f-notify').checked,
@@ -848,16 +872,39 @@
     try { initial = localStorage.getItem('ws-view'); } catch { initial = null; }
   }
   if (initial && VIEWS.includes(initial)) switchView(initial);
-  $('#btn-tpl-add').addEventListener('click', async () => {
-    const name = $('#f-tpl-new-name').value.trim();
-    const text = $('#f-template').value;
-    if (!name) { toast('请先填写格式名称', 'warn'); return; }
-    if (!text.trim()) { toast('当前模板内容为空', 'warn'); return; }
+  // 多格式：每套格式独立正文——新建空白、编辑当前、另存新格式（不复用当前模板内容）
+  $('#btn-tpl-new').addEventListener('click', () => {
+    S.tplEditId = null;
+    $('#f-tpl-edit-name').value = '';
+    $('#f-tpl-edit-text').value = '';
+    const hint = $('#tpl-edit-hint');
+    if (hint) hint.textContent = '新建格式 · 写好后「另存为新格式」';
+    $$('#tpl-manage [data-edit]').forEach((b) => b.classList.remove('is-on'));
+    $('#f-tpl-edit-name').focus();
+  });
+  $('#btn-tpl-save').addEventListener('click', async () => {
+    if (!S.tplEditId || S.tplEditId === 'builtin') {
+      toast('请先点「编辑」选中自定义格式；内置格式只读，可另存为新格式', 'warn'); return;
+    }
+    const name = $('#f-tpl-edit-name').value.trim();
+    const text = $('#f-tpl-edit-text').value;
+    if (!name) { toast('请填写格式名称', 'warn'); return; }
+    if (!text.trim()) { toast('模板正文不能为空', 'warn'); return; }
+    const r = await post('/api/templates', { id: S.tplEditId, name, text });
+    if (!r.ok) { toast(r.error || '保存失败', 'err'); return; }
+    toast('已保存：' + name);
+    await loadTemplates();
+  });
+  $('#btn-tpl-saveas').addEventListener('click', async () => {
+    const name = $('#f-tpl-edit-name').value.trim();
+    const text = $('#f-tpl-edit-text').value;
+    if (!name) { toast('请填写新格式名称', 'warn'); return; }
+    if (!text.trim()) { toast('模板正文不能为空（请先编写该格式自己的内容）', 'warn'); return; }
     const id = 'tpl' + Date.now().toString(36);
     const r = await post('/api/templates', { id, name, text });
-    if (!r.ok) { toast(r.error || '新增格式失败', 'err'); return; }
-    $('#f-tpl-new-name').value = '';
-    toast('已新增格式：' + name);
+    if (!r.ok) { toast(r.error || '另存失败', 'err'); return; }
+    S.tplEditId = id;
+    toast('已另存为新格式：' + name);
     await loadTemplates();
   });
 
