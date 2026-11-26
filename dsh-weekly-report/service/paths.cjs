@@ -106,6 +106,9 @@ function defaultConfig() {
   // 应急时可在配置里改成 loose 回到旧口径（面板不再提供开关）
   ownership: { mode: 'strict' },
     report_template: '',
+    // v1.4.0 周报模板多格式：可配置多套模板，生成时勾选一套或多套分别产出。
+    // 每项 { id, name, path, builtin }；id=builtin 为内置默认模板，始终可用。
+    reportTemplates: [{ id: 'builtin', name: '内置标准格式', path: TEMPLATE_FILE, builtin: true }],
     handler: '',
     threshold: 0.85,
     mcp_url: 'https://yanfa.scedu.tech/api/mcp',
@@ -301,10 +304,82 @@ function log(line) {
   } catch { /* ignore */ }
 }
 
+// ---------------------------------------------------------------------------
+// v1.4.0 周报模板多格式管理
+// ---------------------------------------------------------------------------
+
+/** 模板文件统一放在数据目录的 templates/ 下，避免随包更新被覆盖。 */
+const TEMPLATES_DIR = path.join(DATA_DIR, 'templates');
+
+/** 取模板清单：永远含内置模板；自定义从配置读取，文件丢失则跳过不报错。 */
+function listTemplates() {
+  const cfg = loadConfig().config;
+  const out = [{ id: 'builtin', name: '内置标准格式', path: TEMPLATE_FILE, builtin: true }];
+  const custom = Array.isArray(cfg.reportTemplates) ? cfg.reportTemplates : [];
+  for (const t of custom) {
+    if (!t || t.id === 'builtin' || !t.path) continue;
+    // 保留原有 report_template（单模板旧配置）作为一个可用项
+    try {
+      if (!fs.statSync(t.path).isFile()) continue;
+    } catch { continue; }
+    out.push({ id: String(t.id), name: String(t.name || path.basename(t.path, '.txt')),
+      path: t.path, builtin: false });
+  }
+  // 兼容 v1.3.x：配置里只有 report_template 指向自定义模板时，补成一个可选模板
+  if (cfg.report_template && cfg.report_template !== TEMPLATE_FILE
+      && !out.some((t) => t.path === cfg.report_template)) {
+    try {
+      if (fs.statSync(cfg.report_template).isFile()) {
+        out.push({ id: 'legacy', name: '当前模板', path: cfg.report_template, builtin: false });
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
+/** 读取模板正文。 */
+function readTemplate(id) {
+  const t = listTemplates().find((x) => x.id === String(id));
+  if (!t) return { ok: false, error: `模板不存在：${id}` };
+  try {
+    return { ok: true, template: t, text: fs.readFileSync(t.path, 'utf8').replace(/^\uFEFF/, '') };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+
+/** 新增或更新自定义模板：写入 templates/<id>.txt 并登记到配置。 */
+function saveTemplate(id, name, text) {
+  if (!text || !String(text).trim()) return { ok: false, error: '模板内容不能为空' };
+  const safeId = String(id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safeId || safeId === 'builtin') return { ok: false, error: '模板 id 非法或保留' };
+  const cfg = loadConfig().config;
+  const list = Array.isArray(cfg.reportTemplates) ? cfg.reportTemplates.slice() : [];
+  const file = path.join(TEMPLATES_DIR, `${safeId}.txt`);
+  atomicWrite(file, String(text).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'));
+  const item = { id: safeId, name: String(name || safeId).slice(0, 40), path: file, builtin: false };
+  const idx = list.findIndex((t) => t && t.id === safeId);
+  if (idx >= 0) list[idx] = item; else list.push(item);
+  saveConfig({ reportTemplates: list });
+  return { ok: true, template: item };
+}
+
+/** 删除自定义模板（内置不可删）；当前默认指向它时回退到内置。 */
+function deleteTemplate(id) {
+  if (String(id) === 'builtin') return { ok: false, error: '内置模板不可删除' };
+  const cfg = loadConfig().config;
+  const list = (Array.isArray(cfg.reportTemplates) ? cfg.reportTemplates : [])
+    .filter((t) => t && t.id !== String(id));
+  const target = (Array.isArray(cfg.reportTemplates) ? cfg.reportTemplates : [])
+    .find((t) => t && t.id === String(id));
+  saveConfig({ reportTemplates: list });
+  if (target && target.path && cfg.report_template === target.path) saveConfig({ report_template: '' });
+  if (target && target.path) { try { fs.rmSync(target.path, { force: true }); } catch { /* ignore */ } }
+  return { ok: true };
+}
+
 module.exports = {
   SERVICE_DIR, PLUGIN_DIR, ENGINE_DIR, ENGINE, PUBLIC_DIR, TEMPLATE_FILE,
-  DATA_DIR, CONFIG, KEY, REPORTS, LOGS,
+  DATA_DIR, CONFIG, KEY, REPORTS, LOGS, TEMPLATES_DIR,
   ensureDirs, defaultConfig, loadConfig, saveConfig, maskConfig,
   readKey, writeKey, keyInfo, listReports, readReport, listDirs, probeUserPaths,
-  backup, atomicWrite, log,
+  backup, atomicWrite, log, listTemplates, readTemplate, saveTemplate, deleteTemplate,
 };

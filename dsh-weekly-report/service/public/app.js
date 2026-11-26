@@ -314,6 +314,40 @@
     renderFormatPreview(r.text, r.builtin ? '当前模板 · 通用示例值' : '自定义模板 · 通用示例值');
   }
 
+  // v1.4.0：加载模板清单，渲染生成页格式勾选 + 设置页模板管理
+  async function loadTemplates() {
+    const r = await api('/api/templates');
+    if (!r.ok) return;
+    const list = r.templates || [];
+    const picker = $('#tpl-picker');
+    if (picker) {
+      const chosen = new Set(S.tplSelection || []);
+      picker.innerHTML = list.map((t) =>
+        `<label class="ws-switch"><input type="checkbox" value="${esc(t.id)}" ${chosen.has(t.id) ? 'checked' : ''}>`
+        + `<span class="ws-switch__track"></span><span class="ws-switch__label"><b>${esc(t.name)}</b>`
+        + `<small>${t.builtin ? '内置默认格式' : '自定义格式'}</small></span><em class="ws-switch__state"></em></label>`
+      ).join('');
+      const hint = $('#tpl-format-hint');
+      if (hint) hint.textContent = list.length > 1 ? `共 ${list.length} 套可选` : '不选则用当前模板';
+    }
+    const manage = $('#tpl-manage');
+    if (manage) {
+      manage.innerHTML = list.map((t) =>
+        `<div class="ws-tpl-row"><span class="ws-tpl-row__name">${esc(t.name)}</span>`
+        + `<span class="ws-tpl-row__badge">${t.builtin ? '内置' : '自定义'}</span>`
+        + (t.builtin ? '' : `<button class="ws-tpl-row__btn" type="button" data-del="${esc(t.id)}">删除</button>`)
+        + `</div>`
+      ).join('');
+      $$('#tpl-manage [data-del]').forEach((btn) => btn.addEventListener('click', async () => {
+        const id = btn.dataset.del;
+        if (!confirm('删除这套周报格式？')) return;
+        const rr = await api(`/api/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!rr.ok) { toast(rr.error || '删除失败', 'err'); return; }
+        toast('已删除'); S.tplSelection = []; await loadTemplates();
+      }));
+    }
+  }
+
   // ---------------------------------------------------------------- 设置保存
   async function saveSettings() {
     const cfg = {
@@ -542,6 +576,8 @@
       perfAuto: $('#opt-perf').checked,
       noCache: $('#opt-nocache').checked,
       noTasks: $('#opt-notasks').checked,
+      strictPeriod: $('#opt-strict').checked,
+      templates: (S.tplSelection = $$('#tpl-picker input:checked').map((el) => el.value)),
     };
   }
 
@@ -812,8 +848,22 @@
     try { initial = localStorage.getItem('ws-view'); } catch { initial = null; }
   }
   if (initial && VIEWS.includes(initial)) switchView(initial);
+  $('#btn-tpl-add').addEventListener('click', async () => {
+    const name = $('#f-tpl-new-name').value.trim();
+    const text = $('#f-template').value;
+    if (!name) { toast('请先填写格式名称', 'warn'); return; }
+    if (!text.trim()) { toast('当前模板内容为空', 'warn'); return; }
+    const id = 'tpl' + Date.now().toString(36);
+    const r = await post('/api/templates', { id, name, text });
+    if (!r.ok) { toast(r.error || '新增格式失败', 'err'); return; }
+    $('#f-tpl-new-name').value = '';
+    toast('已新增格式：' + name);
+    await loadTemplates();
+  });
+
   void loadState();
   void loadTemplate();
+  void loadTemplates();
   void loadVersions();
   void refreshRollbackLog();
   setInterval(() => { if (!S.runTimer) void loadState(); }, 20000);

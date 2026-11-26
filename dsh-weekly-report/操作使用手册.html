@@ -72,13 +72,14 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <h1>装上，就能用</h1>
     <p>一条命令完成安装与启动，不用重启 DSH、不用手工拉服务。API Key、输出目录、绩效表与模板由你按需提供，插件负责识别并据此生成、输出。</p>
     <div class="stat">
-      <div><b>v1.6.3</b><small>版本号取自 package.json</small></div>
+      <div><b>v1.7.0</b><small>版本号取自 package.json</small></div>
       <div><b>0 预置凭据</b><small>邮件默认关闭</small></div>
       <div><b>4 个页面</b><small>概览 / 生成 / 设置 / 历史</small></div>
     </div>
     <p style="margin-top:14px;font-size:13px;color:var(--muted)">版本规则：小改动走最后一位（1.1.0 → 1.1.1），功能级变化走第二位（1.0.x → 1.1.0），不兼容大改走第一位。</p>
   </div>
 
+<div class="note"><b>v1.7.0 新功能</b>：生成页「绝对按指定时间计算」开关——勾选后只统计所选周期内开始的事项，上一周期未完成的任务不再结转；「周报格式」可多选，一次生成分别产出多套格式。关闭严格开关时仍按逐周叠加口径（起点固定、终点逐周推进到本周日）。</div>
   <section id="s1" data-t="开始之前 环境 Node 要求 依赖"><h2>1 · 开始之前</h2>
     <table><tr><th>项目</th><th>要求</th></tr>
       <tr><td>运行环境</td><td>Node ≥ 20（DSH 自带，一般无需另装）</td></tr>
@@ -94,7 +95,7 @@ footer{text-align:center;color:var(--text3);font-size:11.5px;padding:20px 0 40px
     <p><b>推荐：通过 npm 安装，全程不用本地脚本。</b>本插件是纯 npm 包，安装、升级、卸载都走标准流程。</p>
     <p>在 DSH 的 profile 目录（<code>%USERPROFILE%\.dsh\profiles\desktop</code>）执行：</p>
     <pre><button class="copy">复制</button>pnpm add dsh-weekly-report-lau</pre>
-    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.6.3"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
+    <p>或编辑 <code>package.json</code> 的 <code>dependencies</code> 加入 <code>"dsh-weekly-report-lau": "^1.7.0"</code> 后 <code>pnpm install</code>。bundle 由包内 <code>cordis.patch.yml</code> 自动挂载，Host 半身由宿主心跳每 20 秒保活、挂了自动拉起。</p>
     <div class="note">不需要重启 DSH：新包就位后，宿主下一次心跳（≤20 秒）即拉起新版本面板；若侧边栏没刷新，点面板里的刷新即可。环境依赖只有两条：Node ≥ 20（DSH 自带）、profile 目录可写；不依赖联网（绩效表组件已随包自带），不需要 Python 或外部服务。</div>
     <table><tr><th>命令</th><th>用途</th></tr>
       <tr><td><code>pnpm add dsh-weekly-report-lau</code></td><td>安装 / 升级到最新版</td></tr>

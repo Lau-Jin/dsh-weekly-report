@@ -158,10 +158,12 @@ export function backfillTimeBase(item, ws, we) {
  * @param {Date} weekEnd 本周末
  * @param {Date} spanStart 本次生成跨度起
  * @param {Date} spanEnd 本次生成跨度止
+ * @param {object} [opts] opts.strictPeriod=true 时启用「绝对按指定时间」：
+ *   只产出起点落在本周内的条目，此前未完成的工单不再结转进来（与口径三互斥）
  * @returns {{ d1: string, d2: string, time: string, settled: boolean, progress?: string }|null}
  *          null = 本周不产出该条目
  */
-export function weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd) {
+export function weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd, opts = {}) {
   if (it.cancelled) return null; // 已取消：不再出现在任何一周
 
   const bf = backfillTimeBase(it, spanStart, spanEnd);
@@ -174,6 +176,10 @@ export function weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd) {
   // 起点固定：补创用工时日；否则用 builder 已算好的 d1（已收敛进生成跨度），兜底建单日
   const start = bf.backfilled ? bf.start : (toDate(it.d1) || created || allDates[0] || null);
   if (!start || start > weekEnd) return null; // 本周还没开始
+
+  // v1.4.0 严格时间模式：绝对按指定时间计算——起点必须落在本周内，
+  // 上周（或指定周期之前）未完成的工单不再结转进本周周报。
+  if (opts.strictPeriod && start < weekStart) return null;
 
   // 按周完成判定（沿用原口径：工时备注标记 / 平台完成日落在本周）
   const marks = (it.week_marks || {})[isoDate(weekStart)] || {};

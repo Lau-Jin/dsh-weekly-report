@@ -90,6 +90,25 @@ try {
   const reset = await post('/api/template/reset', {});
   ok('恢复内置模板', reset.body.ok === true, '');
 
+  // v1.4.0 多格式模板：清单 / 新增 / 读取 / 删除
+  const tplList0 = await req('/api/templates');
+  ok('模板清单始终含内置格式', tplList0.body.ok === true
+    && tplList0.body.templates.some((t) => t.id === 'builtin' && t.builtin === true), '');
+  const tplNew = await post('/api/templates', {
+    id: 'smokeFmt', name: '冒烟简版', text: '【{{category}}】\n  时间: {{time}}\n  事项: {{subject}}\n',
+  });
+  ok('新增自定义格式', tplNew.body.ok === true && tplNew.body.template.id === 'smokeFmt', '');
+  const tplRead = await req('/api/templates/smokeFmt');
+  ok('按 id 读取格式正文', tplRead.body.ok === true && /\{\{subject\}\}/.test(tplRead.body.text), '');
+  const tplList1 = await req('/api/templates');
+  ok('新增后清单可见', tplList1.body.templates.some((t) => t.id === 'smokeFmt'), '');
+  const tplDel = await fetch(BASE + '/api/templates/smokeFmt', { method: 'DELETE' });
+  const tplDelBody = await tplDel.json();
+  ok('删除自定义格式', tplDelBody.ok === true
+    && !(await req('/api/templates')).body.templates.some((t) => t.id === 'smokeFmt'), '');
+  const tplBuiltinDel = await fetch(BASE + '/api/templates/builtin', { method: 'DELETE' });
+  ok('内置格式不可删除', (await tplBuiltinDel.json()).ok === false, '');
+
   const fsList = await req('/api/fs');
   ok('目录浏览可用', fsList.body.ok === true && Array.isArray(fsList.body.dirs), '');
   const mkdir = await post('/api/fs/mkdir', { path: path.join(DATA, 'out', '2026年11月') });
@@ -421,6 +440,31 @@ try {
   ], loadReportTemplate());
   ok('补创工单时间写进周报正文', renderedBack.includes('时间: 2026年11月6日-15日')
     && !renderedBack.includes('时间: 2026年11月9日'), '11/6 起点，非建单日 11/9');
+
+  // v1.4.0 严格时间开关：开启后不结转此前未完成的工单
+  const strictOn = { strictPeriod: true };
+  ok('严格模式：旧工单不在后续周产出',
+    weekTimeOf(backItem, D(9), D(15), spanS, spanE, strictOn) === null
+    && weekTimeOf(backItem, D(16), D(22), spanS, spanE, strictOn) === null
+    && weekTimeOf(backItem, D(23), D(29), spanS, spanE, strictOn) === null, '11/6 起点的工单');
+  ok('严格模式：叠加模式仍保留（默认不受影响）',
+    Boolean(weekTimeOf(backItem, D(16), D(22), spanS, spanE))
+    && weekTimeOf(backItem, D(16), D(22), spanS, spanE).time === '2026年11月6日-22日', '');
+  const freshItem = { created: '2026-11-20', d1: '2026-11-20', d2: '2026-11-30',
+    work_dates: ['2026-11-20'], backfill_dates: ['2026-11-20'], earliest_work_date: '2026-11-20',
+    settled: false, settled_platform: false, completion: '', week_marks: {} };
+  const freshInWeek = weekTimeOf(freshItem, D(16), D(22), spanS, spanE, strictOn);
+  ok('严格模式：本周新开工单正常产出', Boolean(freshInWeek)
+    && freshInWeek.time === '2026年11月20日-22日', freshInWeek ? freshInWeek.time : '(未产出)');
+  ok('严格模式：本周之前开工的工单不产出',
+    weekTimeOf(freshItem, D(9), D(15), spanS, spanE, strictOn) === null, '');
+  ok('面板传递严格开关参数', /strictPeriod:\s*\$\('#opt-strict'\)\.checked/.test(jsText), '');
+  ok('面板传递模板多选参数', /templates:\s*\(S\.tplSelection = \$\$\('#tpl-picker input:checked'\)/.test(jsText), '');
+  ok('引擎解析 --strict-period 与 --templates',
+    /'perf-allow-insert', 'perf-preview', 'strict-period'/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8'))
+    && /args\.templates/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8')), '');
+  ok('多模板逐套渲染并命名文件', /formatId:\s*fmt\.id/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8'))
+    && /'__' \+ fmt\.id \+ '\.txt'/.test(fs.readFileSync(path.join(HERE, 'service/engine/gen-weekly.mjs'), 'utf8')), '');
 
   const plugin = JSON.parse(fs.readFileSync(path.join(HERE, 'plugin.json'), 'utf8'));
   ok('plugin.json 声明装上即用', plugin.automatic.autoRegisterBundle === true && plugin.automatic.autoStartService === true, '');

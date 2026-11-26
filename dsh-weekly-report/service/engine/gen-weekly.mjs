@@ -40,7 +40,7 @@ const FLAGS = new Set([
   'last-month', 'auto-file', 'log', 'no-cache', 'no-tasks', 'perf-auto', 'perf-template-check',
   'perf-dump', 'perf-check', 'perf-fix', 'perf-platform', 'notify', 'notify-test',
   'notify-dry-run', 'no-miss-file', 'mcp-list-tools', 'where', 'dry-run',
-  'perf-allow-insert', 'perf-preview',
+  'perf-allow-insert', 'perf-preview', 'strict-period',
 ]);
 
 function parseArgs(argv) {
@@ -282,6 +282,30 @@ async function main() {
   const dataArgs = args.mcpArgs ? JSON.parse(args.mcpArgs) : {};
   const rptTemplate = loadReportTemplate(args.reportTemplate || cfg.report_template || '');
 
+  // v1.4.0 多模板格式：--templates id1,id2（或配置里选中的模板 id）→ 解析为 [{id,name,text}]。
+  // 未指定时沿用单一模板（默认内置/自定义），向后完全兼容。
+  const templateIds = String(args.templates || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const templateDefs = Array.isArray(cfg.reportTemplates) ? cfg.reportTemplates : [];
+  const reportFormats = [];
+  const seenTpl = new Set();
+  for (const id of templateIds) {
+    if (seenTpl.has(id)) continue;
+    seenTpl.add(id);
+    const def = templateDefs.find((t) => t && String(t.id) === id);
+    const tplPath = id === 'builtin' ? '' : (def && def.path ? def.path : '');
+    reportFormats.push({
+      id,
+      name: (def && def.name) || (id === 'builtin' ? '标准格式' : id),
+      text: loadReportTemplate(tplPath || args.reportTemplate || cfg.report_template || ''),
+    });
+  }
+  // 没解析出任何模板 → 用当前模板作为唯一格式
+  if (!reportFormats.length) reportFormats.push({ id: 'current', name: '当前格式', text: rptTemplate });
+  if (reportFormats.length > 1) {
+    console.log(`周报多格式：${reportFormats.map((f) => f.name).join(' / ')}`);
+  }
+
   const artifacts = { reports: [], perf: [], weeks: [] };
   const perfMonths = new Map();
 
@@ -313,7 +337,8 @@ async function main() {
     for (const it of allItems) {
       // 时间口径统一由 rules.mjs 的 weekTimeOf 计算（含补创工单规则与 v1.3.2 逐周叠加），
       // 便于冒烟测试直接对生产代码做回归，避免两处逻辑漂移。
-      const wt = weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd);
+      // v1.4.0：--strict-period 打开时严格按指定时间计算，不结转此前未完成的工单。
+      const wt = weekTimeOf(it, weekStart, weekEnd, spanStart, spanEnd, { strictPeriod: Boolean(args.strictPeriod) });
       if (!wt) continue;
       const copy = { ...it, d1: wt.d1, d2: wt.d2, time: wt.time, settled: wt.settled, done: wt.settled };
       if (copy.settled) copy.progress = '100%';
@@ -334,15 +359,25 @@ async function main() {
 
   for (const [ws, we] of periods) {
     const items = itemsOfWeek(ws, we);
-    const outPath = args.out || defaultOutPath(outDir, ws, we);
-    fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-    const text = renderReport(items, rptTemplate);
-    // 与历史文件保持一致：Python 版用文本模式写盘，Windows 上换行是 CRLF
-    fs.writeFileSync(outPath, text.replace(/\r?\n/g, '\r\n'), 'utf8');
-    console.log(`OK ${items.length} 条 out=${outPath}`);
-    artifacts.reports.push({ path: outPath, name: path.basename(outPath), start: isoDate(ws), end: isoDate(we), count: items.length });
+    const baseOutPath = args.out || defaultOutPath(outDir, ws, we);
+    fs.mkdirSync(path.dirname(path.resolve(baseOutPath)), { recursive: true });
     artifacts.weeks.push({ start: isoDate(ws), end: isoDate(we), count: items.length });
 
+    // 单格式：沿用原文件名，保持历史行为；多格式：每套模板一份带格式后缀的文件
+    reportFormats.forEach((fmt, fmtIdx) => {
+      const outPath = reportFormats.length === 1
+        ? baseOutPath
+        : baseOutPath.replace(/\.txt$/i, '') + '__' + fmt.id + '.txt';
+      const text = renderReport(items, fmt.text);
+      // 与历史文件保持一致：Python 版用文本模式写盘，Windows 上换行是 CRLF
+      fs.writeFileSync(outPath, text.replace(/\r?\n/g, '\r\n'), 'utf8');
+      console.log(`OK ${items.length} 条 [${fmt.name}] out=${outPath}`);
+      artifacts.reports.push({ path: outPath, name: path.basename(outPath),
+        format: fmt.name, formatId: fmt.id,
+        start: isoDate(ws), end: isoDate(we), count: items.length });
+    });
+
+    const outPath = baseOutPath;
     const missPath = `${outPath.replace(/\.txt$/i, '')}_未匹配.txt`;
     if (fs.existsSync(missPath)) fs.rmSync(missPath, { force: true });
     // 同一自然周的旧「裁剪版」文件（例如 10/1~10/4）删掉，避免与新的完整周报重复计入绩效表

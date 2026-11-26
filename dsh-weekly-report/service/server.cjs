@@ -226,6 +226,13 @@ function resolvePeriod(body, cfg) {
   if (body.perfAuto) args.push('--perf-auto');
   if (body.noTasks) args.push('--no-tasks');
   if (body.noCache) args.push('--no-cache');
+  // v1.4.0：绝对按指定时间计算——不把周期之前未完成的工单结转进来
+  if (body.strictPeriod) args.push('--strict-period');
+  // v1.4.0：多模板生成——逗号分隔的模板 id，逐套渲染
+  const tplIds = Array.isArray(body.templates)
+    ? body.templates.map(String).filter(Boolean)
+    : [];
+  if (tplIds.length) args.push('--templates', tplIds.join(','));
   args.push('--log');
   return args;
 }
@@ -621,6 +628,26 @@ const server = http.createServer(async (req, res) => {
     if (method === 'POST' && p === '/api/template/reset') {
       P.saveConfig({ report_template: '' });
       return json(res, 200, { ok: true, path: P.TEMPLATE_FILE });
+    }
+
+    // v1.4.0 周报模板多格式管理
+    if (method === 'GET' && p === '/api/templates') {
+      return json(res, 200, { ok: true, templates: P.listTemplates() });
+    }
+    if (method === 'GET' && p.startsWith('/api/templates/')) {
+      const id = decodeURIComponent(p.slice('/api/templates/'.length));
+      const r = P.readTemplate(id);
+      return json(res, r.ok ? 200 : 404, r);
+    }
+    if (method === 'POST' && p === '/api/templates') {
+      const body = await readBody(req);
+      const r = P.saveTemplate(body.id, body.name, body.text);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+    if (method === 'DELETE' && p.startsWith('/api/templates/')) {
+      const id = decodeURIComponent(p.slice('/api/templates/'.length));
+      const r = P.deleteTemplate(id);
+      return json(res, r.ok ? 200 : 400, r);
     }
 
     if (method === 'POST' && p === '/api/run') return json(res, 200, startRun(await readBody(req)));

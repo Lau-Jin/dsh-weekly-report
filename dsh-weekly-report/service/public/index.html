@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>周报工作台</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=1.6.3">
+  <link rel="stylesheet" href="/style.css?v=1.7.0">
 </head>
 <body>
   <div class="ws-app">
@@ -113,6 +113,13 @@
               <label class="ws-switch"><input type="checkbox" id="opt-perf"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>同步写入绩效表</b><small>与所选周期联动：覆盖哪个月就写哪个月的绩效表（可多月）；关闭时只生成周报、不碰绩效表</small></span><em class="ws-switch__state"></em></label>
               <label class="ws-switch"><input type="checkbox" id="opt-nocache"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>重新拉取数据</b><small>忽略本地缓存，重新读取工单 / 任务 / 工时（刚补的完成备注要靠它才刷得到）</small></span><em class="ws-switch__state"></em></label>
               <label class="ws-switch"><input type="checkbox" id="opt-notasks"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>不含任务中心</b><small>只按工单生成</small></span><em class="ws-switch__state"></em></label>
+              <label class="ws-switch"><input type="checkbox" id="opt-strict"><span class="ws-switch__track"></span><span class="ws-switch__label"><b>绝对按指定时间计算</b><small>只统计所选周期内开始的事项；上一周期未完成的任务不再叠加进本周（关闭时按逐周叠加口径）</small></span><em class="ws-switch__state"></em></label>
+            </div>
+
+            <div class="ws-card" id="tpl-format-card">
+              <div class="ws-card__head"><h2>周报格式（可多选）</h2><span class="ws-card__hint" id="tpl-format-hint">不选则用当前模板</span></div>
+              <p class="ws-card__desc">勾选一套或多套模板，一次生成分别产出对应格式的周报；不选时沿用设置里的当前模板。</p>
+              <div class="ws-opts" id="tpl-picker"></div>
             </div>
 
             <div class="ws-runbar">
@@ -209,6 +216,12 @@
             <p class="ws-card__desc">占位符会按周报数据替换；不改动就沿用你约定的格式。</p>
             <textarea id="f-template" class="ws-textarea" rows="8" spellcheck="false"></textarea>
             <div class="ws-chips" id="tpl-chips"></div>
+            <div class="ws-card__head" style="margin-top:12px"><h2>多格式模板管理</h2><span class="ws-card__hint">生成时可勾选多套</span></div>
+            <div class="ws-tpl-list" id="tpl-manage"></div>
+            <div class="ws-field__row">
+              <input id="f-tpl-new-name" placeholder="新格式名称，如「简洁版」" maxlength="40">
+              <button class="ws-btn ws-btn--ghost" id="btn-tpl-add" type="button">从当前内容新增格式</button>
+            </div>
           </div>
 
           <div class="ws-card">
@@ -353,6 +366,6 @@
   </div>
 
   <div class="ws-toast" id="toast" hidden></div>
-  <script src="/app.js?v=1.6.3"></script>
+  <script src="/app.js?v=1.7.0"></script>
 </body>
 </html>
